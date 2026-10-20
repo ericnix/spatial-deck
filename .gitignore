@@ -1,0 +1,14 @@
+# build do meson
+/build/
+
+# binários compilados (make)
+padrao-compositor
+padrao-host
+tools/padrao-shot
+
+# artefatos do sistema/editor
+*.o
+*.so
+*.log
+.DS_Store
+*~

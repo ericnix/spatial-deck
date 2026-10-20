@@ -1,0 +1,238 @@
+/* Padrão — deck trapezoidal (folha da layer surface de topo) */
+
+:root {
+  --glass: rgba(12, 18, 26, .80);
+  --glass2: rgba(16, 24, 34, .92);
+  --ink: #eaf2fb;
+  --muted: #93a4b8;
+  --accent: #4fd6c2;
+  --accent2: #f4b860;
+  --line: rgba(255, 255, 255, .10);
+  --tilt: 0deg;
+  --font: "Inter", "Cantarell", "Segoe UI", system-ui, sans-serif;
+  --rest-h: 64px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  font-family: var(--font);
+  color: var(--ink);
+  background: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* a superfície inteira recebe o ponteiro; o visual é recortado em #deck */
+#stage { position: absolute; inset: 0; }
+
+/* --------------------------- o deck ---------------------------------- */
+#deck {
+  position: absolute; left: 4%; right: 4%; bottom: 0; top: 0;
+  /* trapézio: base mais larga que o topo */
+  clip-path: polygon(3% 100%, 97% 100%, 86% 0, 14% 0);
+  background:
+    linear-gradient(180deg, rgba(24, 36, 50, .88) 0%, rgba(10, 15, 22, .94) 62%, rgba(7, 11, 16, .97) 100%);
+  border-top: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 -22px 60px rgba(0, 0, 0, .55);
+  transform: perspective(1400px) rotateX(var(--tilt));
+  transform-origin: 50% 100%;
+  transition: none;
+}
+
+/* brilho de borda superior (só visível no repouso, "corta" o deck) */
+#glow {
+  position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: .8;
+  filter: blur(.4px);
+}
+
+#strip {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px;
+  padding: 6px 26px 8px;
+}
+.grp { display: flex; align-items: center; gap: 8px; }
+.sep {
+  width: 1px; align-self: stretch; margin: 12px 6px;
+  background: linear-gradient(180deg, transparent, rgba(255, 255, 255, .22), transparent);
+}
+#right { position: absolute; right: 12%; bottom: 12px; display: flex; gap: 8px; }
+.chip {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, .07);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --------------------------- blocos ---------------------------------- */
+.tile {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px;
+  width: 46px; height: 46px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, .05);
+  cursor: pointer;
+  transition: transform .18s cubic-bezier(.2, .9, .3, 1.2), background .15s, border-color .15s;
+}
+.tile:hover { background: rgba(255, 255, 255, .13); transform: translateY(-4px) scale(1.08); }
+.tile:active { transform: translateY(-1px) scale(1.02); }
+.tile img.ic { width: 26px; height: 26px; object-fit: contain; pointer-events: none; }
+.tile .glyph {
+  font-size: 20px; line-height: 1; color: var(--muted);
+}
+.tile .ah {                          /* avatar de reserva (sem ícone) */
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border-radius: 8px;
+  background: linear-gradient(140deg, #35506b, #22364a);
+  color: #cfe4f6; font-size: 13px; font-weight: 600;
+}
+
+/* legenda acima do bloco (só no estado aberto) */
+.tile .cap {
+  position: absolute; bottom: calc(100% + 10px); left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  max-width: 168px;
+  padding: 5px 10px;
+  background: var(--glass2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11.5px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  opacity: 0; pointer-events: none;
+  transition: opacity .16s, transform .16s;
+}
+.tile:hover .cap { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* indicador de janela em foco */
+.tile .dot {
+  position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--muted); opacity: .55;
+}
+.tile.focused { background: rgba(79, 214, 194, .14); border-color: rgba(79, 214, 194, .5); }
+.tile.focused .dot { background: var(--accent); opacity: 1; box-shadow: 0 0 8px var(--accent); }
+
+/* botão de fechar (só no estado aberto, em janelas) */
+.tile .x {
+  position: absolute; top: -7px; right: -7px;
+  width: 19px; height: 19px;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: 50%;
+  background: var(--glass2); color: var(--muted);
+  font-size: 10px; cursor: pointer;
+  opacity: 0; transition: opacity .15s;
+}
+.tile:hover .x { opacity: 1; }
+.tile .x:hover { background: #e5484d; color: #fff; border-color: #e5484d; }
+
+/* ------------------- estados: aberto / grid --------------------------- */
+#stage[data-state="open"] #deck { --tilt: 14deg; }
+#stage[data-state="grid"]  #deck { --tilt: 4deg; }
+
+#stage[data-state="open"] .tile { width: 58px; height: 58px; }
+#stage[data-state="open"] .tile img.ic,
+#stage[data-state="open"] .tile .ah { width: 32px; height: 32px; font-size: 15px; }
+
+/* no repouso, escondemos legendas e o relógio encolhe o espaço */
+#stage[data-state="rest"] .tile .cap { display: none; }
+#stage[data-state="rest"] .tile .x { display: none; }
+/* a faixa é estreita: só 6 favoritos e sem o aviso de "nenhuma janela" */
+#stage[data-state="rest"] #favs .tile:nth-child(n+7) { display: none; }
+#stage[data-state="rest"] #win-grp:not(:has(.tile)) { display: none; }
+
+/* --------------------------- grade de apps ---------------------------- */
+#overlay {
+  position: absolute; inset: 0;
+  clip-path: polygon(3% 100%, 97% 100%, 86% 0, 14% 0);
+  background: linear-gradient(180deg, rgba(14, 21, 30, .99), rgba(8, 12, 17, 1));
+  opacity: 0;
+  transition: opacity .22s ease;
+}
+#overlay.show { opacity: 1; }
+#overlay[hidden] { display: none; }
+
+/* recuo lateral maior que o clip do trapézio no topo (14%/86%),
+   senão a linha de busca é cortada nas duas pontas */
+#panel {
+  position: absolute; inset: 8% 16% 7%;
+  display: flex; flex-direction: column; gap: 10px;
+}
+
+#search-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 14px;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+#search-row .mag { font-size: 18px; color: var(--muted); }
+#search {
+  flex: 1;
+  background: transparent; border: 0; outline: none;
+  color: var(--ink); font-size: 16px; font-family: var(--font);
+}
+#search::placeholder { color: var(--muted); }
+#close-grid {
+  border: 0; background: rgba(255, 255, 255, .08); color: var(--muted);
+  width: 26px; height: 26px; border-radius: 50%; cursor: pointer;
+}
+#close-grid:hover { background: #e5484d; color: #fff; }
+
+#results {
+  flex: 1; overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+  align-content: start;
+  padding: 4px 2px;
+}
+#results::-webkit-scrollbar { width: 8px; }
+#results::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 4px; }
+
+.res {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 12px 6px 9px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, transform .12s;
+}
+.res:hover { background: rgba(79, 214, 194, .12); border-color: rgba(79, 214, 194, .4); transform: translateY(-2px); }
+.res img { width: 38px; height: 38px; object-fit: contain; pointer-events: none; }
+.res .ah {
+  width: 38px; height: 38px;
+  display: grid; place-items: center;
+  border-radius: 11px;
+  background: linear-gradient(140deg, #35506b, #22364a);
+  color: #cfe4f6; font-size: 17px; font-weight: 600;
+}
+.res .nm {
+  font-size: 11.5px; color: var(--ink);
+  text-align: center;
+  overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+#foot { font-size: 11px; color: var(--muted); text-align: center; }
+
+/* --------------------------- tooltip --------------------------------- */
+#tip {
+  position: absolute; left: 50%; top: -34px;
+  transform: translateX(-50%);
+  padding: 5px 11px;
+  background: var(--glass2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11.5px; color: var(--ink);
+  pointer-events: none; white-space: nowrap;
+}

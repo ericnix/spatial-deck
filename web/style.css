@@ -1,0 +1,334 @@
+/* =========================================================
+   Canva Infinito SVG — estilos
+   ========================================================= */
+
+:root{
+  --bg-0:#070a11;
+  --ink:#e8eefb;
+  --muted:#8ea3c4;
+  --line:rgba(140,175,235,.16);
+  --accent:#5eead4;
+  --accent-2:#38bdf8;
+  --danger:#fb7185;
+  --deck-notch:5%;           /* quanto o topo do trapézio é mais estreito */
+  --hud-bg:rgba(11,17,27,.72);
+}
+
+*{ box-sizing:border-box }
+
+html,body{ height:100% }
+
+body{
+  margin:0;
+  overflow:hidden;
+  overscroll-behavior:none;
+  color:var(--ink);
+  font-family:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Inter, Arial, sans-serif;
+  font-size:14px;
+  -webkit-font-smoothing:antialiased;
+  background:
+    radial-gradient(1100px 700px at 50% -12%, #17243c 0%, transparent 62%),
+    radial-gradient(900px 600px at 100% 112%, #10202b 0%, transparent 55%),
+    var(--bg-0);
+}
+
+/* ===================== quadro / svg ===================== */
+
+#stage{ position:fixed; inset:0 }
+
+#board{
+  display:block;
+  width:100%;
+  height:100%;
+  touch-action:none;
+  cursor:crosshair;
+  background:transparent;
+  user-select:none;
+  -webkit-user-select:none;
+}
+
+#board *{ touch-action:none }
+
+/* cursores por ferramenta */
+#board[data-tool="select"]{ cursor:default }
+#board[data-tool="text"]{ cursor:text }
+#board[data-tool="eraser"]{ cursor:cell }
+#board[data-tool="pan"],
+#board.is-pan{ cursor:grab }
+#board.is-pan:active{ cursor:grabbing }
+
+/* alvos de clique das formas */
+#layer [data-shape]{ pointer-events:stroke }
+#layer rect[data-shape],
+#layer ellipse[data-shape],
+#layer text[data-shape]{ pointer-events:all }
+
+/* realce da seleção */
+#layer [data-shape][data-selected="true"]{
+  filter:drop-shadow(0 0 5px rgba(94,234,212,.75));
+}
+
+/* enquanto o editor está aberto, o <text> real fica oculto (só o textarea aparece) */
+#layer text[data-editing="1"]{ opacity:0 }
+
+/* editor de texto embutido no canvas (sem window.prompt, que é bloqueado
+   em navegadores embarcados) */
+.texteditor{
+  position:absolute;
+  z-index:12;
+  margin:0;
+  padding:2px;
+  border:0;
+  outline:0;
+  border-radius:4px;
+  background:rgba(9,14,23,.82);
+  color:var(--ink);
+  font-family:ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  line-height:1.25;
+  white-space:pre;
+  resize:none;
+  overflow:hidden;
+  caret-color:currentColor;
+  box-shadow:0 0 0 1.5px rgba(94,234,212,.85), 0 10px 26px rgba(0,0,0,.5);
+}
+.texteditor::placeholder{ color:rgba(140,175,235,.5) }
+
+/* ===================== HUD ===================== */
+
+.hud{
+  position:fixed;
+  z-index:15;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:7px 12px;
+  border-radius:14px;
+  border:1px solid var(--line);
+  background:var(--hud-bg);
+  backdrop-filter:blur(12px) saturate(130%);
+  -webkit-backdrop-filter:blur(12px) saturate(130%);
+  box-shadow:0 12px 30px rgba(0,0,0,.35);
+}
+
+#hud-info{ top:18px; left:18px }
+#hud-zoom{ top:18px; right:18px }
+
+.hud__brand{ display:flex; align-items:center; gap:8px; font-weight:600; letter-spacing:.2px }
+.hud__dot{
+  width:9px; height:9px; border-radius:50%;
+  background:linear-gradient(180deg,var(--accent),var(--accent-2));
+  box-shadow:0 0 12px rgba(94,234,212,.8);
+}
+.hud__sep{ width:1px; height:20px; background:var(--line) }
+.hud__meta{ color:var(--muted); font-variant-numeric:tabular-nums }
+.hud__meta b{ color:var(--ink); font-weight:600; min-width:2.4em; display:inline-block }
+.hud__zoom{ min-width:52px; text-align:center; color:var(--muted); font-variant-numeric:tabular-nums }
+.hud__zoom b{ color:var(--ink) }
+
+.chip{
+  height:30px; min-width:30px; padding:0 8px;
+  display:inline-grid; place-items:center;
+  border-radius:9px;
+  border:1px solid var(--line);
+  background:rgba(148,180,235,.06);
+  color:var(--ink);
+  font:inherit; font-size:15px; line-height:1;
+  cursor:pointer;
+  transition:background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
+}
+.chip:hover{ background:rgba(148,180,235,.14); border-color:rgba(148,180,235,.3) }
+.chip:active{ transform:translateY(1px) }
+.chip[aria-pressed="false"]{ color:var(--muted) }
+.chip--text{ font-size:12px; padding:0 10px; color:var(--muted) }
+.chip--text:hover{ color:var(--ink) }
+
+/* ===================== DECK TRAPEZOIDAL ===================== */
+
+#deck{
+  position:fixed;
+  left:50%;
+  bottom:22px;
+  transform:translateX(-50%);
+  width:min(1040px, 94vw);
+  z-index:20;
+  filter:drop-shadow(0 24px 38px rgba(0,0,0,.55));
+}
+
+/* moldura (gradiente) — trapézio mais estreito em cima, largo embaixo */
+.deck__frame{
+  position:absolute; inset:0;
+  pointer-events:none;
+  clip-path:polygon(var(--deck-notch) 0, calc(100% - var(--deck-notch)) 0, 100% 100%, 0 100%);
+  background:linear-gradient(180deg, rgba(94,234,212,.9), rgba(56,189,248,.45) 40%, rgba(140,175,235,.14));
+}
+
+/* superfície interna, com o mesmo trapézio recuado ~1.5px */
+.deck__panel{
+  position:absolute;
+  inset:1.5px;
+  pointer-events:none;
+  clip-path:polygon(calc(var(--deck-notch) - .6%) 0, calc(100% - var(--deck-notch) + .6%) 0, 100% 100%, 0 100%);
+  background:linear-gradient(180deg, rgba(17,25,38,.97), rgba(8,12,19,.985));
+  backdrop-filter:blur(14px) saturate(125%);
+  -webkit-backdrop-filter:blur(14px) saturate(125%);
+}
+
+.deck__row{
+  position:relative;
+  z-index:2;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  min-height:80px;
+  padding:18px 44px 18px;
+}
+
+.deck__grip{
+  position:absolute; top:6px; left:50%;
+  transform:translateX(-50%);
+  width:70px; height:3px; border-radius:3px;
+  background:linear-gradient(90deg, transparent, rgba(148,180,235,.45), transparent);
+}
+
+.deck__group{ display:flex; align-items:center; gap:6px }
+.deck__sep{ width:1px; height:34px; background:var(--line) }
+
+/* botões do deck */
+.tool{
+  position:relative;
+  width:46px; height:42px;
+  display:grid; place-items:center;
+  border-radius:12px;
+  border:1px solid transparent;
+  background:transparent;
+  color:var(--muted);
+  cursor:pointer;
+  transition:background .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
+}
+.tool svg{ width:20px; height:20px }
+.tool:hover{ color:var(--ink); background:rgba(148,180,235,.10) }
+.tool:active{ transform:translateY(1px) }
+
+.tool[aria-pressed="true"]{
+  color:#03161c;
+  background:linear-gradient(180deg, var(--accent), var(--accent-2));
+  box-shadow:0 8px 20px rgba(94,234,212,.28), inset 0 1px 0 rgba(255,255,255,.4);
+}
+.tool--danger:hover{ color:var(--danger); background:rgba(251,113,133,.12) }
+
+/* tooltips (fora do recorte, por isso o deck não tem clip-path no container) */
+.tool[data-tip]::after,
+.swatch[data-tip]::after{
+  content:attr(data-tip);
+  position:absolute;
+  bottom:calc(100% + 12px);
+  left:50%;
+  transform:translateX(-50%) translateY(4px);
+  padding:6px 10px;
+  border-radius:9px;
+  border:1px solid var(--line);
+  background:rgba(9,14,23,.96);
+  color:var(--ink);
+  font-size:12px; white-space:nowrap;
+  opacity:0; pointer-events:none;
+  transition:opacity .16s ease, transform .16s ease;
+  z-index:5;
+}
+.tool[data-tip]:hover::after,
+.swatch[data-tip]:hover::after{ opacity:1; transform:translateX(-50%) translateY(0) }
+
+/* amostra de cor */
+.swatch{
+  position:relative;
+  width:46px; height:42px;
+  display:grid; place-items:center;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:rgba(148,180,235,.06);
+  cursor:pointer;
+}
+.swatch:hover{ background:rgba(148,180,235,.14) }
+.swatch input[type="color"]{ position:absolute; inset:0; opacity:0; cursor:pointer }
+.swatch__chip{
+  width:22px; height:22px; border-radius:7px;
+  background:#7dd3fc;
+  box-shadow:0 0 0 1px rgba(255,255,255,.22) inset, 0 6px 14px rgba(0,0,0,.45);
+}
+
+/* espessura */
+.size{
+  display:flex; align-items:center; gap:10px;
+  height:42px; padding:0 14px;
+  border-radius:12px;
+  border:1px solid var(--line);
+  background:rgba(148,180,235,.06);
+}
+.size__label{ color:var(--muted); font-size:12px; letter-spacing:.3px; text-transform:uppercase }
+.size input[type="range"]{
+  -webkit-appearance:none; appearance:none;
+  width:118px; height:4px; border-radius:4px; outline:none;
+  background:linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+.size input[type="range"]::-webkit-slider-thumb{
+  -webkit-appearance:none; appearance:none;
+  width:16px; height:16px; border-radius:50%;
+  background:#0b1018; border:2px solid var(--accent);
+  box-shadow:0 2px 8px rgba(0,0,0,.5);
+  cursor:pointer;
+}
+.size input[type="range"]::-moz-range-thumb{
+  width:14px; height:14px; border-radius:50%;
+  background:#0b1018; border:2px solid var(--accent);
+  cursor:pointer;
+}
+.size output{
+  min-width:22px; text-align:right;
+  color:var(--ink); font-variant-numeric:tabular-nums; font-weight:600;
+}
+
+/* ===================== toast ===================== */
+
+#toast{
+  position:fixed;
+  top:96px; left:50%;
+  transform:translateX(-50%) translateY(-8px);
+  z-index:30;
+  padding:9px 16px;
+  border-radius:11px;
+  border:1px solid var(--line);
+  background:rgba(9,14,23,.95);
+  color:var(--ink);
+  font-size:13px;
+  opacity:0; pointer-events:none;
+  transition:opacity .22s ease, transform .22s ease;
+}
+#toast.show{ opacity:1; transform:translateX(-50%) translateY(0) }
+
+/* ===================== responsivo ===================== */
+
+/* telas médias: deck mais compacto para caber em uma única linha */
+@media (max-width:1180px){
+  .deck__row{ gap:8px; padding:16px 34px 16px }
+  .tool{ width:42px; height:40px }
+  .swatch{ width:42px; height:40px }
+  .size{ padding:0 10px }
+  .size input[type="range"]{ width:92px }
+}
+
+@media (max-width:900px){
+  :root{ --deck-notch:4% }
+  #deck{ bottom:14px; width:95vw }
+  .deck__row{ gap:6px; padding:14px 20px 14px; min-height:66px }
+  .tool{ width:36px; height:34px; border-radius:10px }
+  .tool svg{ width:18px; height:18px }
+  .swatch{ width:38px; height:34px; border-radius:10px }
+  .swatch__chip{ width:18px; height:18px }
+  .size{ height:34px; padding:0 8px; gap:7px }
+  .size__label{ display:none }
+  .size input[type="range"]{ width:64px }
+  .size output{ min-width:18px }
+  .deck__sep{ height:26px }
+  #hud-info .hud__meta{ display:none }
+}

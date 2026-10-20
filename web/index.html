@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Canva Infinito · SVG</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ===================== QUADRO INFINITO ===================== -->
+  <main id="stage">
+    <svg id="board" data-tool="pen" xmlns="http://www.w3.org/2000/svg" aria-label="Quadro infinito de desenho">
+      <defs>
+        <!-- grade maior (linhas) -->
+        <pattern id="p-major" patternUnits="userSpaceOnUse" width="160" height="160">
+          <path id="p-major-path" d="M0 0 H160 M0 0 V160" fill="none"
+                stroke="rgba(130,170,235,.18)" stroke-width="1"/>
+        </pattern>
+        <!-- grade menor (pontos) -->
+        <pattern id="p-minor" patternUnits="userSpaceOnUse" width="40" height="40">
+          <circle id="p-dot" cx="20" cy="20" r="1.3" fill="rgba(150,182,240,.30)"/>
+        </pattern>
+      </defs>
+
+      <!-- fundo: grade desenhada em espaço de tela (sempre nítida em qualquer zoom) -->
+      <rect id="grid-lines" x="0" y="0" width="100%" height="100%" fill="url(#p-major)"/>
+      <rect id="grid-dots"  x="0" y="0" width="100%" height="100%" fill="url(#p-minor)"/>
+
+      <!-- mundo (sofre pan/zoom) -->
+      <g id="viewport">
+        <g id="layer"></g>
+        <g id="overlay"></g>
+      </g>
+    </svg>
+  </main>
+
+  <!-- ===================== HUD (cabeçalho e zoom) ===================== -->
+  <header id="hud-info" class="hud">
+    <span class="hud__brand">
+      <span class="hud__dot" aria-hidden="true"></span>
+      Canva Infinito
+    </span>
+    <span class="hud__sep" aria-hidden="true"></span>
+    <span class="hud__meta">x <b id="coords-x">0</b> · y <b id="coords-y">0</b></span>
+  </header>
+
+  <div id="hud-zoom" class="hud">
+    <button class="chip" data-action="zoom-out" title="Diminuir zoom" aria-label="Diminuir zoom">−</button>
+    <span class="hud__zoom"><b id="zoom-value">100%</b></span>
+    <button class="chip" data-action="zoom-in" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
+    <span class="hud__sep" aria-hidden="true"></span>
+    <button class="chip chip--text" data-action="zoom-reset" title="Voltar para 100%">1:1</button>
+    <button class="chip chip--text" data-action="zoom-fit" title="Enquadrar o desenho">Ajustar</button>
+    <button class="chip" data-action="grid" aria-pressed="true" title="Mostrar/ocultar grade" aria-label="Mostrar ou ocultar grade">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M9 3.5v17M15 3.5v17M3.5 9h17M3.5 15h17"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- ===================== DECK TRAPEZOIDAL ===================== -->
+  <nav id="deck" role="toolbar" aria-label="Ferramentas de desenho">
+    <div class="deck__frame" aria-hidden="true"></div>
+    <div class="deck__panel" aria-hidden="true"></div>
+
+    <div class="deck__row">
+      <span class="deck__grip" aria-hidden="true"></span>
+
+      <!-- ferramentas de desenho -->
+      <div class="deck__group" role="group" aria-label="Ferramentas">
+        <button class="tool" data-tool="select" data-tip="Selecionar / mover · V" aria-pressed="false" aria-label="Selecionar">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M5 3l6.5 17 2.3-6.4L20 11z"/></svg>
+        </button>
+        <button class="tool" data-tool="pan" data-tip="Mover a tela · H ou espaço" aria-pressed="false" aria-label="Mover a tela">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/></svg>
+        </button>
+        <button class="tool" data-tool="pen" data-tip="Caneta livre · P" aria-pressed="true" aria-label="Caneta livre">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L20 8a2.8 2.8 0 0 0-4-4L4 16z"/><path d="M14 6l4 4"/></svg>
+        </button>
+        <button class="tool" data-tool="line" data-tip="Linha reta · L" aria-pressed="false" aria-label="Linha reta">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M6 18L18 6"/><circle cx="5.5" cy="18.5" r="1.6"/><circle cx="18.5" cy="5.5" r="1.6"/></svg>
+        </button>
+        <button class="tool" data-tool="rect" data-tip="Retângulo · R (shift = quadrado)" aria-pressed="false" aria-label="Retângulo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="2.5"/></svg>
+        </button>
+        <button class="tool" data-tool="ellipse" data-tip="Elipse / círculo · O" aria-pressed="false" aria-label="Elipse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"/></svg>
+        </button>
+        <button class="tool" data-tool="text" data-tip="Texto · T (duplo clique edita)" aria-pressed="false" aria-label="Texto">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 6.5V5h14v1.5M12 5v14M9 19h6"/></svg>
+        </button>
+        <button class="tool" data-tool="eraser" data-tip="Borracha · E" aria-pressed="false" aria-label="Borracha">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 15.5l6-6a2 2 0 0 1 2.9 0l4.6 4.6a2 2 0 0 1 0 2.8L15.5 20H9.5z"/><path d="M9 20h11"/></svg>
+        </button>
+      </div>
+
+      <span class="deck__sep" aria-hidden="true"></span>
+
+      <!-- estilo -->
+      <div class="deck__group deck__group--style" role="group" aria-label="Estilo do traço">
+        <label class="swatch" data-tip="Cor do traço" aria-label="Cor do traço">
+          <input type="color" id="color" value="#7dd3fc">
+          <span class="swatch__chip" aria-hidden="true"></span>
+        </label>
+        <label class="size" aria-label="Espessura do traço">
+          <span class="size__label">Traço</span>
+          <input type="range" id="size" min="1" max="26" step="1" value="3">
+          <output id="size-out" for="size">3</output>
+        </label>
+      </div>
+
+      <span class="deck__sep" aria-hidden="true"></span>
+
+      <!-- histórico e arquivo -->
+      <div class="deck__group" role="group" aria-label="Histórico e arquivo">
+        <button class="tool" data-action="undo" data-tip="Desfazer · Ctrl+Z" aria-label="Desfazer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h9a5.5 5.5 0 1 1-2.6 10.4"/><path d="M4 8l4-4M4 8l4 4"/></svg>
+        </button>
+        <button class="tool" data-action="redo" data-tip="Refazer · Ctrl+Shift+Z" aria-label="Refazer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 8h-9a5.5 5.5 0 1 0 2.6 10.4"/><path d="M20 8l-4-4M20 8l-4 4"/></svg>
+        </button>
+        <button class="tool" data-action="export" data-tip="Exportar SVG" aria-label="Exportar SVG">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 11l4 4 4-4M5 20h14"/></svg>
+        </button>
+        <button class="tool tool--danger" data-action="clear" data-tip="Limpar quadro" aria-label="Limpar quadro">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9.5 7V4.8h5V7M6.5 7l1 12.2h9L17.5 7M10.5 10.5v6M13.5 10.5v6"/></svg>
+        </button>
+      </div>
+    </div>
+  </nav>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js" defer></script>
+</body>
+</html>

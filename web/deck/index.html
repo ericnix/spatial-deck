@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Padrão — deck</title>
+<link rel="stylesheet" href="deck.css">
+</head>
+<body data-page="deck">
+
+  <!-- superfície do deck: ocupa exatamente a caixa da layer surface -->
+  <div id="stage" data-state="rest">
+
+    <!-- o deck trapezoidal em si -->
+    <div id="deck">
+      <div id="glow"></div>
+      <div id="strip">
+        <div id="win-grp" class="grp">
+          <div id="wins"></div>
+          <div class="sep"></div>
+        </div>
+        <div id="favs" class="grp"></div>
+        <button id="grid-btn" class="tile plain" title="Todos os aplicativos (Esc para fechar)">
+          <span class="glyph">▤</span>
+          <span class="cap">Apps</span>
+        </button>
+        <div id="right">
+          <span class="chip" id="zoom-chip">100%</span>
+          <span class="chip" id="clock">--:--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- grade de aplicativos (estado "grid") -->
+    <div id="overlay" hidden>
+      <div id="panel">
+        <div id="search-row">
+          <span class="mag">⌕</span>
+          <input id="search" type="text" placeholder="Buscar aplicativos…" autocomplete="off" spellcheck="false">
+          <button id="close-grid" title="Fechar (Esc)">✕</button>
+        </div>
+        <div id="results"></div>
+        <div id="foot">Enter abre o primeiro resultado · Esc fecha</div>
+      </div>
+    </div>
+
+    <div id="tip" hidden></div>
+  </div>
+
+  <script src="../shared/bridge.js"></script>
+  <script src="deck.js"></script>
+</body>
+</html>
