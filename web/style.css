@@ -110,7 +110,8 @@ body{
   box-shadow:0 12px 30px rgba(0,0,0,.35);
 }
 
-#hud-info{ top:18px; left:18px }
+/* o chip da marca sai da frente da barra lateral */
+#hud-info{ top:18px; left:132px }
 #hud-zoom{ top:18px; right:18px }
 
 .hud__brand{ display:flex; align-items:center; gap:8px; font-weight:600; letter-spacing:.2px }
@@ -143,13 +144,15 @@ body{
 .chip--text:hover{ color:var(--ink) }
 
 /* ===================== DECK TRAPEZOIDAL ===================== */
+/*barra vertical na lateral esquerda (era horizontal no rodapé) */
 
 #deck{
   position:fixed;
-  left:50%;
-  bottom:22px;
-  transform:translateX(-50%);
-  width:min(1040px, 94vw);
+  left:22px;
+  top:50%;
+  transform:translateY(-50%);
+  width:auto;
+  --deck-notch:12%;           /* afina o topo do trapézio (mais visível na vertical) */
   z-index:20;
   filter:drop-shadow(0 24px 38px rgba(0,0,0,.55));
 }
@@ -177,28 +180,27 @@ body{
   position:relative;
   z-index:2;
   display:flex;
-  flex-wrap:wrap;
+  flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:10px;
-  min-height:80px;
-  padding:18px 44px 18px;
+  gap:9px;
+  padding:16px 14px;
 }
 
 .deck__grip{
-  position:absolute; top:6px; left:50%;
-  transform:translateX(-50%);
-  width:70px; height:3px; border-radius:3px;
-  background:linear-gradient(90deg, transparent, rgba(148,180,235,.45), transparent);
+  position:absolute; top:50%; right:4px;
+  transform:translateY(-50%);
+  width:3px; height:64px; border-radius:3px;
+  background:linear-gradient(180deg, transparent, rgba(148,180,235,.45), transparent);
 }
 
-.deck__group{ display:flex; align-items:center; gap:6px }
-.deck__sep{ width:1px; height:34px; background:var(--line) }
+.deck__group{ display:flex; flex-direction:column; align-items:center; gap:4px }
+.deck__sep{ width:30px; height:1px; background:var(--line) }
 
 /* botões do deck */
 .tool{
   position:relative;
-  width:46px; height:42px;
+  width:40px; height:38px;
   display:grid; place-items:center;
   border-radius:12px;
   border:1px solid transparent;
@@ -219,13 +221,15 @@ body{
 .tool--danger:hover{ color:var(--danger); background:rgba(251,113,133,.12) }
 
 /* tooltips (fora do recorte, por isso o deck não tem clip-path no container) */
+/* na barra lateral as dicas aparecem à direita do botão */
 .tool[data-tip]::after,
 .swatch[data-tip]::after{
   content:attr(data-tip);
   position:absolute;
-  bottom:calc(100% + 12px);
-  left:50%;
-  transform:translateX(-50%) translateY(4px);
+  left:calc(100% + 12px);
+  top:50%;
+  bottom:auto;
+  transform:translateY(-50%) translateX(-4px);
   padding:6px 10px;
   border-radius:9px;
   border:1px solid var(--line);
@@ -237,12 +241,12 @@ body{
   z-index:5;
 }
 .tool[data-tip]:hover::after,
-.swatch[data-tip]:hover::after{ opacity:1; transform:translateX(-50%) translateY(0) }
+.swatch[data-tip]:hover::after{ opacity:1; transform:translateY(-50%) translateX(0) }
 
 /* amostra de cor */
 .swatch{
   position:relative;
-  width:46px; height:42px;
+  width:40px; height:38px;
   display:grid; place-items:center;
   border-radius:12px;
   border:1px solid var(--line);
@@ -257,18 +261,25 @@ body{
   box-shadow:0 0 0 1px rgba(255,255,255,.22) inset, 0 6px 14px rgba(0,0,0,.45);
 }
 
-/* espessura */
+/* espessura — na barra lateral o controle desce (rótulo, slider vertical, valor) */
 .size{
-  display:flex; align-items:center; gap:10px;
-  height:42px; padding:0 14px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+  height:auto; width:42px; padding:9px 0;
   border-radius:12px;
   border:1px solid var(--line);
   background:rgba(148,180,235,.06);
 }
-.size__label{ color:var(--muted); font-size:12px; letter-spacing:.3px; text-transform:uppercase }
+.size__label{ color:var(--muted); font-size:10px; letter-spacing:.2px; text-transform:uppercase }
 .size input[type="range"]{
   -webkit-appearance:none; appearance:none;
-  width:118px; height:4px; border-radius:4px; outline:none;
+  /* trilho vertical: o input é girado e as margens compensam a rotação
+     (metade da diferença entre comprimento e espessura) */
+  transform:rotate(-90deg);
+  margin:29px -29px;
+  width:62px; height:4px; border-radius:4px; outline:none;
   background:linear-gradient(90deg, var(--accent), var(--accent-2));
 }
 .size input[type="range"]::-webkit-slider-thumb{
@@ -284,7 +295,7 @@ body{
   cursor:pointer;
 }
 .size output{
-  min-width:22px; text-align:right;
+  min-width:22px; text-align:center;
   color:var(--ink); font-variant-numeric:tabular-nums; font-weight:600;
 }
 
@@ -308,27 +319,28 @@ body{
 
 /* ===================== responsivo ===================== */
 
-/* telas médias: deck mais compacto para caber em uma única linha */
+/* telas médias: barra lateral mais compacta */
 @media (max-width:1180px){
-  .deck__row{ gap:8px; padding:16px 34px 16px }
-  .tool{ width:42px; height:40px }
-  .swatch{ width:42px; height:40px }
-  .size{ padding:0 10px }
-  .size input[type="range"]{ width:92px }
+  .deck__row{ gap:8px; padding:14px 12px }
+  .tool{ width:38px; height:36px }
+  .swatch{ width:38px; height:36px }
+  .size{ width:40px; padding:8px 0 }
+  .size input[type="range"]{ width:54px; margin:25px -25px }
+  .deck__sep{ width:26px }
 }
 
 @media (max-width:900px){
-  :root{ --deck-notch:4% }
-  #deck{ bottom:14px; width:95vw }
-  .deck__row{ gap:6px; padding:14px 20px 14px; min-height:66px }
-  .tool{ width:36px; height:34px; border-radius:10px }
+  #deck{ left:10px; --deck-notch:10% }
+  .deck__row{ gap:6px; padding:12px 10px }
+  .tool{ width:34px; height:32px; border-radius:10px }
   .tool svg{ width:18px; height:18px }
-  .swatch{ width:38px; height:34px; border-radius:10px }
+  .swatch{ width:34px; height:32px; border-radius:10px }
   .swatch__chip{ width:18px; height:18px }
-  .size{ height:34px; padding:0 8px; gap:7px }
+  .size{ width:36px; padding:7px 0; gap:5px }
   .size__label{ display:none }
-  .size input[type="range"]{ width:64px }
+  .size input[type="range"]{ width:46px; margin:21px -21px }
   .size output{ min-width:18px }
-  .deck__sep{ height:26px }
+  .deck__sep{ width:22px }
+  .deck__grip{ height:48px }
   #hud-info .hud__meta{ display:none }
 }
