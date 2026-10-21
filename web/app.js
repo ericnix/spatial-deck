@@ -34,6 +34,85 @@
   const sizeInput  = $('#size');
   const sizeOut    = $('#size-out');
   const swatchChip = $('.swatch__chip');
+  const glowEl     = $('#active-window-glow');
+
+  /* ----------------------- tema do canvas ----------------------- */
+  const CANVAS_THEMES = ['default', 'minimalist', 'oxidized-iron'];
+  const CANVAS_THEME_KEY = 'padrao.canvas.theme';
+  const CANVAS_THEME_LABELS = {
+    'default': 'Azul Padrão',
+    'minimalist': 'Minimalista',
+    'oxidized-iron': 'Ferro Oxidado',
+  };
+
+  /* Troca o tema: escreve o seletor [data-canvas-theme] (é o CSS que
+     traz as cores, a grade e a moldura da janela ativa), guarda a
+     escolha no localStorage e marca o botão correspondente. */
+  function setCanvasTheme(themeName) {
+    const name = CANVAS_THEMES.includes(themeName) ? themeName : 'default';
+    document.documentElement.dataset.canvasTheme = name;
+    try { localStorage.setItem(CANVAS_THEME_KEY, name); } catch (_) {}
+    $$('.theme-chip').forEach(btn => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.theme === name));
+    });
+    repaintAll();
+    scheduleRender();
+    return name;
+  }
+
+  /* O WebKit compõe por software e só repinta a região alterada: ao
+     trocar o tema, ficaríamos com pedaços da tela na paleta antiga.
+     display:none + reflow força a repintura completa da página. */
+  function repaintAll() {
+    const body = document.body;
+    const prev = body.style.display;
+    body.style.display = 'none';
+    void body.offsetHeight;
+    body.style.display = prev;
+  }
+
+  function savedCanvasTheme() {
+    try { return localStorage.getItem(CANVAS_THEME_KEY); } catch (_) { return null; }
+  }
+
+  /* tema pedido pela URL (?theme=oxidized-iron) — tem precedência sobre
+     a escolha guardada, para abrir o canvas já num tema */
+  function themeFromURL() {
+    try {
+      const q = new URLSearchParams(location.search);
+      const name = q.get('theme') || q.get('tema');
+      return name && CANVAS_THEMES.includes(name) ? name : null;
+    } catch (_) { return null; }
+  }
+
+  /* --------------------- moldura da janela ativa --------------------- */
+  /* Acompanha a seleção em coordenadas de tela (é o "glow" do item
+     em foco). */
+  function updateGlow() {
+    if (!glowEl) return;
+    if (!selection.size) { glowEl.classList.remove('on'); return; }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    selection.forEach(el => {
+      if (!el.isConnected) return;
+      let b;
+      try { b = el.getBBox(); } catch (_) { return; }
+      const t = readTranslate(el);
+      const pad = 12 / view.k;
+      const sx = (b.x + t.x) * view.k + view.x;
+      const sy = (b.y + t.y) * view.k + view.y;
+      const sw = b.width * view.k, sh = b.height * view.k;
+      x0 = Math.min(x0, sx - pad);
+      y0 = Math.min(y0, sy - pad);
+      x1 = Math.max(x1, sx + sw + pad);
+      y1 = Math.max(y1, sy + sh + pad);
+    });
+    if (!isFinite(x0)) { glowEl.classList.remove('on'); return; }
+    glowEl.style.left = x0 + 'px';
+    glowEl.style.top = y0 + 'px';
+    glowEl.style.width = (x1 - x0) + 'px';
+    glowEl.style.height = (y1 - y0) + 'px';
+    glowEl.classList.add('on');
+  }
 
   /* ----------------------- constantes / estado ----------------------- */
   const MIN_K = 0.12;
@@ -351,6 +430,7 @@
 
   function drawOverlay() {
     while (overlay.firstChild) overlay.removeChild(overlay.firstChild);
+    updateGlow();
     if (!selection.size) return;
     const k = view.k;
     selection.forEach(el => {
@@ -757,6 +837,12 @@
   $$('[data-action]').forEach(btn =>
     btn.addEventListener('click', () => runAction(btn.dataset.action)));
 
+  $$('.theme-chip').forEach(btn =>
+    btn.addEventListener('click', () => {
+      const name = setCanvasTheme(btn.dataset.theme);
+      toast(`Tema: ${CANVAS_THEME_LABELS[name] || name}`);
+    }));
+
   colorInput.addEventListener('input', () => {
     tool.color = colorInput.value;
     swatchChip.style.background = tool.color;
@@ -790,10 +876,15 @@
     history.index = 0;
     setTool('pen');
 
+    // tema salvo (ou o pedido pela URL) — o seletor [data-canvas-theme]
+    // é o que troca as cores, a grade e a moldura da janela ativa
+    setCanvasTheme(themeFromURL() || savedCanvasTheme() || 'default');
+
     // exemplo inicial (apague com o botão da lixeira)
     const hint = makeShape('text', {
       x: -120, y: -140,
-      fill: 'rgba(140,175,235,.75)',
+      fill: 'currentColor',          /* segue a cor do tema */
+      'fill-opacity': '.75',
       'font-size': 22,
       'font-family': 'ui-sans-serif, system-ui, Segoe UI, Arial, sans-serif',
       'text-anchor': 'middle',

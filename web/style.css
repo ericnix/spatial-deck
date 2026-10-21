@@ -3,15 +3,93 @@
    ========================================================= */
 
 :root{
+  --deck-notch:5%;           /* quanto o topo do trapézio é mais estreito */
+}
+
+/* ===================== TEMA DO CANVAS ===================== */
+/* Trocado em app.js por setCanvasTheme(), que escreve o atributo
+   [data-canvas-theme] no <body> e guarda a escolha no localStorage.
+   Temas: default (Azul Padrão), minimalist (Minimalista),
+   oxidized-iron (Ferro Oxidado). */
+
+/* Azul Padrão — o visual original */
+:root,
+[data-canvas-theme="default"]{
   --bg-0:#070a11;
   --ink:#e8eefb;
   --muted:#8ea3c4;
   --line:rgba(140,175,235,.16);
   --accent:#5eead4;
   --accent-2:#38bdf8;
+  --accent-ink:#03161c;
   --danger:#fb7185;
-  --deck-notch:5%;           /* quanto o topo do trapézio é mais estreito */
   --hud-bg:rgba(11,17,27,.72);
+  --bg-glow-1:#17243c;
+  --bg-glow-2:#10202b;
+  /* grade */
+  --grid-line:rgba(130,170,235,.18);
+  --grid-dot:rgba(150,182,240,.30);
+  /* moldura da janela ativa */
+  --glow-border:rgba(94,234,212,.55);
+  --glow-shadow:0 0 0 1px rgba(94,234,212,.28), 0 0 26px rgba(56,189,248,.22);
+  --glow-bg:rgba(94,234,212,.05);
+  /* deck */
+  --deck-frame:linear-gradient(180deg, rgba(94,234,212,.9), rgba(56,189,248,.45) 40%, rgba(140,175,235,.14));
+  --deck-panel:linear-gradient(180deg, rgba(17,25,38,.97), rgba(8,12,19,.985));
+  /* chips */
+  --chip-bg:rgba(148,180,235,.06);
+  --chip-bg-hover:rgba(148,180,235,.14);
+  --chip-line-hover:rgba(148,180,235,.3);
+}
+
+/* Minimalista — só tons de cinza, sem brilho */
+[data-canvas-theme="minimalist"]{
+  --bg-0:#0b0b0c;
+  --ink:#f2f2f3;
+  --muted:#8b8b90;
+  --line:rgba(255,255,255,.12);
+  --accent:#e6e6e8;
+  --accent-2:#b6b6bc;
+  --accent-ink:#111113;
+  --danger:#c96a72;
+  --hud-bg:rgba(20,20,22,.8);
+  --bg-glow-1:#1b1b1d;
+  --bg-glow-2:#131315;
+  --grid-line:rgba(255,255,255,.07);
+  --grid-dot:rgba(255,255,255,.13);
+  --glow-border:rgba(255,255,255,.40);
+  --glow-shadow:0 0 0 1px rgba(255,255,255,.16);
+  --glow-bg:transparent;
+  --deck-frame:linear-gradient(180deg, rgba(255,255,255,.20), rgba(255,255,255,.05) 45%, rgba(255,255,255,0));
+  --deck-panel:linear-gradient(180deg, rgba(24,24,26,.97), rgba(12,12,13,.985));
+  --chip-bg:rgba(255,255,255,.05);
+  --chip-bg-hover:rgba(255,255,255,.12);
+  --chip-line-hover:rgba(255,255,255,.28);
+}
+
+/* Ferro Oxidado — ferrugem, verdete e metal */
+[data-canvas-theme="oxidized-iron"]{
+  --bg-0:#14100d;
+  --ink:#eadfd1;
+  --muted:#a68a70;
+  --line:rgba(198,140,92,.18);
+  --accent:#e08b4b;
+  --accent-2:#7fa88a;
+  --accent-ink:#1a0f07;
+  --danger:#d1503f;
+  --hud-bg:rgba(30,22,17,.8);
+  --bg-glow-1:#3a2416;
+  --bg-glow-2:#1d2a22;
+  --grid-line:rgba(198,140,92,.16);
+  --grid-dot:rgba(160,190,150,.20);
+  --glow-border:rgba(224,139,75,.50);
+  --glow-shadow:0 0 0 1px rgba(224,139,75,.26), 0 0 30px rgba(180,90,40,.20);
+  --glow-bg:rgba(224,139,75,.045);
+  --deck-frame:linear-gradient(180deg, rgba(224,139,75,.85), rgba(150,100,60,.40) 42%, rgba(110,130,110,.12));
+  --deck-panel:linear-gradient(180deg, rgba(28,22,18,.97), rgba(14,11,9,.985));
+  --chip-bg:rgba(198,140,92,.07);
+  --chip-bg-hover:rgba(198,140,92,.16);
+  --chip-line-hover:rgba(198,140,92,.32);
 }
 
 *{ box-sizing:border-box }
@@ -27,10 +105,31 @@ body{
   font-size:14px;
   -webkit-font-smoothing:antialiased;
   background:
-    radial-gradient(1100px 700px at 50% -12%, #17243c 0%, transparent 62%),
-    radial-gradient(900px 600px at 100% 112%, #10202b 0%, transparent 55%),
+    radial-gradient(1100px 700px at 50% -12%, var(--bg-glow-1) 0%, transparent 62%),
+    radial-gradient(900px 600px at 100% 112%, var(--bg-glow-2) 0%, transparent 55%),
     var(--bg-0);
 }
+
+/* a grade do SVG herda as cores do tema (o CSS vence o atributo
+   de apresentação do elemento) */
+#p-major-path{ stroke:var(--grid-line) }
+#p-dot{ fill:var(--grid-dot) }
+
+/* moldura da janela ativa */
+#active-window-glow{
+  position:fixed;
+  left:0; top:0; width:0; height:0;
+  border-radius:14px;
+  border:1px solid var(--glow-border);
+  background:var(--glow-bg);
+  box-shadow:var(--glow-shadow);
+  opacity:0;
+  pointer-events:none;
+  z-index:10;
+  transition:opacity .18s ease, left .12s ease, top .12s ease,
+             width .12s ease, height .12s ease;
+}
+#active-window-glow.on{ opacity:1 }
 
 /* ===================== quadro / svg ===================== */
 
@@ -113,6 +212,7 @@ body{
 /* o chip da marca sai da frente da barra lateral */
 #hud-info{ top:18px; left:132px }
 #hud-zoom{ top:18px; right:18px }
+#hud-themes{ top:58px; right:18px }
 
 .hud__brand{ display:flex; align-items:center; gap:8px; font-weight:600; letter-spacing:.2px }
 .hud__dot{
@@ -131,17 +231,39 @@ body{
   display:inline-grid; place-items:center;
   border-radius:9px;
   border:1px solid var(--line);
-  background:rgba(148,180,235,.06);
+  background:var(--chip-bg);
   color:var(--ink);
   font:inherit; font-size:15px; line-height:1;
   cursor:pointer;
   transition:background .15s ease, border-color .15s ease, color .15s ease, transform .1s ease;
 }
-.chip:hover{ background:rgba(148,180,235,.14); border-color:rgba(148,180,235,.3) }
+.chip:hover{ background:var(--chip-bg-hover); border-color:var(--chip-line-hover) }
 .chip:active{ transform:translateY(1px) }
 .chip[aria-pressed="false"]{ color:var(--muted) }
 .chip--text{ font-size:12px; padding:0 10px; color:var(--muted) }
 .chip--text:hover{ color:var(--ink) }
+
+/* ===================== TEMA (botões) ===================== */
+
+.theme-chip{
+  height:26px; padding:0 11px;
+  display:inline-grid; place-items:center;
+  border-radius:8px;
+  border:1px solid var(--line);
+  background:var(--chip-bg);
+  color:var(--muted);
+  font-size:11px; letter-spacing:.2px;
+  cursor:pointer;
+  transition:background .15s ease, color .15s ease, border-color .15s ease;
+}
+.theme-chip:hover{ color:var(--ink); background:var(--chip-bg-hover); border-color:var(--chip-line-hover) }
+.theme-chip:active{ transform:translateY(1px) }
+.theme-chip[aria-pressed="true"]{
+  color:var(--accent-ink);
+  background:linear-gradient(180deg, var(--accent), var(--accent-2));
+  border-color:transparent;
+  font-weight:600;
+}
 
 /* ===================== DECK TRAPEZOIDAL ===================== */
 /*barra vertical na lateral esquerda (era horizontal no rodapé) */
@@ -162,7 +284,7 @@ body{
   position:absolute; inset:0;
   pointer-events:none;
   clip-path:polygon(var(--deck-notch) 0, calc(100% - var(--deck-notch)) 0, 100% 100%, 0 100%);
-  background:linear-gradient(180deg, rgba(94,234,212,.9), rgba(56,189,248,.45) 40%, rgba(140,175,235,.14));
+  background:var(--deck-frame);
 }
 
 /* superfície interna, com o mesmo trapézio recuado ~1.5px */
@@ -171,7 +293,7 @@ body{
   inset:1.5px;
   pointer-events:none;
   clip-path:polygon(calc(var(--deck-notch) - .6%) 0, calc(100% - var(--deck-notch) + .6%) 0, 100% 100%, 0 100%);
-  background:linear-gradient(180deg, rgba(17,25,38,.97), rgba(8,12,19,.985));
+  background:var(--deck-panel);
   backdrop-filter:blur(14px) saturate(125%);
   -webkit-backdrop-filter:blur(14px) saturate(125%);
 }

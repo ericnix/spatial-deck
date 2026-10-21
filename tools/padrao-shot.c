@@ -194,18 +194,40 @@ static int save_png(const char *path, const Shot *s) {
 		PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
 	png_write_info(png, info);
 
-	/* O screencopy entrega RGBX little-endian (fmt 0x34324258 = "XB24",
-	   byte de alfa 0xff no fim): na memória a ordem é R,G,B,X.
-	   Canais válidos em p[0],p[1],p[2]; descartamos o alfa em p[3]. */
+	/* A ordem dos canais depende do formato que o compositor entregou.
+	 * O screencopy do wlroots anuncia o formato do shm (wayland-client.h):
+	 *   0 = WL_SHM_FORMAT_ARGB8888  -> memoria B,G,R,A
+	 *   1 = WL_SHM_FORMAT_XRGB8888  -> memoria B,G,R,X
+	 * Nos dois, o byte 0 e o azul e o byte 2 e o vermelho (palavra de
+	 * 32 bits little-endian). Ler como RGBX sai com R e B trocados. */
+	int r_off, g_off, b_off;
+	switch (s->format) {
+	case 0: /* WL_SHM_FORMAT_ARGB8888 */
+	case 1: /* WL_SHM_FORMAT_XRGB8888 */
+		r_off = 2; g_off = 1; b_off = 0;
+		break;
+	case 0x34325258: /* DRM_FORMAT_XRGB8888 */
+		r_off = 2; g_off = 1; b_off = 0;
+		break;
+	case 0x34324258: /* DRM_FORMAT_XB24 */
+		r_off = 0; g_off = 1; b_off = 2;
+		break;
+	default:
+		fprintf(stderr, "padrao-shot: formato 0x%08x desconhecido, "
+			"assumindo RGBX\n", s->format);
+		r_off = 0; g_off = 1; b_off = 2;
+		break;
+	}
+
 	uint8_t *row = malloc((size_t)s->width * 3);
 	for (uint32_t y = 0; y < s->height; y++) {
 		/* y_invert: o compositor entrega linhas de baixo pra cima */
 		uint32_t src = s->y_invert ? (s->height - 1 - y) : y;
 		const uint8_t *sp = (const uint8_t *)s->pixels + (size_t)src * s->stride;
 		for (uint32_t x = 0; x < s->width; x++) {
-			row[x * 3 + 0] = sp[x * 4 + 0]; /* R */
-			row[x * 3 + 1] = sp[x * 4 + 1]; /* G */
-			row[x * 3 + 2] = sp[x * 4 + 2]; /* B */
+			row[x * 3 + 0] = sp[x * 4 + r_off]; /* R */
+			row[x * 3 + 1] = sp[x * 4 + g_off]; /* G */
+			row[x * 3 + 2] = sp[x * 4 + b_off]; /* B */
 		}
 		png_write_row(png, row);
 	}

@@ -1,10 +1,24 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-canvas-theme="default">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Canva Infinito · SVG</title>
 <link rel="stylesheet" href="style.css">
+<script>
+/* Aplica o tema ANTES da primeira pintura: o WebKit só repinta a região
+   alterada, então trocar o tema depois deixaria partes da tela com a
+   paleta antiga. A URL (?theme=…) tem precedência sobre a escolha salva. */
+(function () {
+  try {
+    var q = new URLSearchParams(location.search);
+    var name = q.get('theme') || q.get('tema')
+      || localStorage.getItem('padrao.canvas.theme') || 'default';
+    if (['default', 'minimalist', 'oxidized-iron'].indexOf(name) < 0) name = 'default';
+    document.documentElement.dataset.canvasTheme = name;
+  } catch (e) {}
+})();
+</script>
 </head>
 <body>
 
@@ -58,6 +72,16 @@
       </svg>
     </button>
   </div>
+
+  <!-- ===================== TEMA DO CANVAS ===================== -->
+  <div id="hud-themes" class="hud" role="group" aria-label="Tema do canvas">
+    <button class="theme-chip" data-theme="default" aria-pressed="true" title="Azul Padrão">Azul</button>
+    <button class="theme-chip" data-theme="minimalist" aria-pressed="false" title="Minimalista">Minimal</button>
+    <button class="theme-chip" data-theme="oxidized-iron" aria-pressed="false" title="Ferro Oxidado">Ferro</button>
+  </div>
+
+  <!-- moldura da janela ativa (posicionada por app.js) -->
+  <div id="active-window-glow" aria-hidden="true"></div>
 
   <!-- ===================== DECK TRAPEZOIDAL ===================== -->
   <nav id="deck" role="toolbar" aria-label="Ferramentas de desenho">

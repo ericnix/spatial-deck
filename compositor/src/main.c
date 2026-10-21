@@ -193,7 +193,14 @@ static void *web_layer_thread(void *data) {
 
 	const char *file = getenv("PADRAO_WEB_FILE");
 	if (!file || !*file) file = "web/index.html";
-	char *abs = resolve_web_file(file);
+	/* separa a query string (?theme=...) do caminho */
+	char path[PATH_MAX];
+	const char *query = strchr(file, '?');
+	size_t plen = query ? (size_t)(query - file) : strlen(file);
+	if (plen >= sizeof(path)) plen = sizeof(path) - 1;
+	memcpy(path, file, plen);
+	path[plen] = '\0';
+	char *abs = resolve_web_file(path);
 	if (!abs) {
 		wlr_log(WLR_ERROR, "web: não achei %s — camada web desligada", file);
 		goto out;
@@ -201,6 +208,16 @@ static void *web_layer_thread(void *data) {
 	char *uri = g_filename_to_uri(abs, NULL, NULL);
 	free(abs);
 	if (!uri) goto out;
+	if (query) {
+		/* anexa o query à URI (ex.: ?theme=oxidized-iron) */
+		char *full = malloc(strlen(uri) + strlen(query) + 1);
+		if (full) {
+			strcpy(full, uri);
+			strcat(full, query);
+			g_free(uri);
+			uri = full;
+		}
+	}
 
 	GtkWidget *window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
 	gtk_layer_init_for_window(GTK_WINDOW(window));

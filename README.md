@@ -66,6 +66,36 @@ Aceitos: `{"t":"dbg","state":"open"}`, `{"t":"dbg","state":"grid"}` e
 O mesmo caminho serve para o canvas (`page=canvas`): injete o evento que a
 página escuta, por exemplo `{"t":"view","x":0,"y":0,"z":1}`.
 
+## Temas do canvas
+
+O app de `web/` (o fundo do compositor) tem três temas, trocáveis pelos
+botões `.theme-chip` no canto superior direito:
+
+| Tema | Seletor | Visual |
+| --- | --- | --- |
+| Azul Padrão | `default` | o original: azul profundo, aciano/teal, grade azul |
+| Minimalista | `minimalist` | só tons de cinza, sem brilho, grade quase invisível |
+| Ferro Oxidado | `oxidized-iron` | ferrugem, verdete e metal, grade quente |
+
+No CSS cada tema é um bloco `[data-canvas-theme="…"]` que define as
+variáveis de cor, bordas, fundos da grade e os estilos da moldura
+`#active-window-glow` (o contorno do item em foco). O seletor é escrito no
+`<html>`.
+
+Em `app.js`, `setCanvasTheme(nome)` troca o seletor, guarda a escolha no
+`localStorage` (`padrao.canvas.theme`) e marca o botão ativo. A URL tem
+precedência sobre a escolha salva:
+
+```
+web/index.html?theme=oxidized-iron
+```
+
+É o que o compositor usa para abrir o fundo já num tema:
+
+```sh
+PADRAO_WEB_FILE="web/index.html?theme=oxidized-iron" ./build/padrao-compositor
+```
+
 ## Camada web (fundo em WebKitGTK)
 
 O compositor cria **em C** (`compositor/src/main.c`) uma layer surface com
