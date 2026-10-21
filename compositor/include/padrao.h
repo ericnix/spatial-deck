@@ -77,6 +77,13 @@ struct padrao_server {
 	double view_x, view_y;
 	double zoom; /* 0.5 .. 3.0 — aplicado como escala de saída */
 
+	/* transformação vinda do canvas (zoom + deslocamento em px de tela):
+	 *   screen_x = (window_x * scale) + offset_x
+	 *   screen_y = (window_y * scale) + offset_y */
+	double canvas_scale;
+	double canvas_off_x;
+	double canvas_off_y;
+
 	/* estado de interação */
 	enum { PADRAO_GRAB_NONE, PADRAO_GRAB_MOVE, PADRAO_GRAB_RESIZE,
 	       PADRAO_GRAB_PAN } grab;
@@ -179,6 +186,9 @@ struct padrao_layer {
 /* main.c */
 void padrao_schedule_frame(struct padrao_server *server);
 void padrao_request_quit(struct padrao_server *server);
+/* view.c */
+void padrao_apply_canvas_transform(struct padrao_server *server);
+void padrao_apply_cluster(struct padrao_server *server, const char *placements);
 
 /* output.c */
 void padrao_handle_new_output(struct wl_listener *listener, void *data);

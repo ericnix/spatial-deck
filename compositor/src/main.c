@@ -273,6 +273,7 @@ int main(int argc, char *argv[]) {
 
 	struct padrao_server server = {
 		.view_x = 0, .view_y = 0, .zoom = 1.0,
+		.canvas_scale = 1.0, .canvas_off_x = 0, .canvas_off_y = 0,
 		.grab = PADRAO_GRAB_NONE,
 		.ipc_listen_fd = -1, .ipc_fd = -1,
 	};

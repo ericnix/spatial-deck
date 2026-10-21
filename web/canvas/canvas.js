@@ -50,32 +50,41 @@
     }, 2600);
   }
 
+  /* O compositor aplica o zoom do canvas como escala da SAIDA (as janelas
+     acompanham). Aqui o mundo e desenhado em 1:1, senao o canvas e as
+     janelas ficariam com escalas diferentes. */
   function screenToWorld(sx, sy) {
-    return { x: sx / S.view.z + S.view.x, y: sy / S.view.z + S.view.y };
+    return { x: sx + S.view.x, y: sy + S.view.y };
   }
 
   /* ----------------------------- câmera ------------------------------ */
   function applyView() {
     const { x, y, z } = S.view;
     world.style.transform =
-      `translate(${(-x * z).toFixed(2)}px, ${(-y * z).toFixed(2)}px) scale(${z})`;
-    const fine = 24 * z, major = 120 * z;
+      `translate(${(-x).toFixed(2)}px, ${(-y).toFixed(2)}px)`;
+    const fine = 24, major = 120;
     grid.style.backgroundSize =
       `${fine}px ${fine}px, ${fine}px ${fine}px, ${major}px ${major}px, ${major}px ${major}px`;
-    grid.style.backgroundPosition = `${-x * z}px ${-y * z}px`;
+    grid.style.backgroundPosition = `${-x}px ${-y}px`;
     zoomChip.textContent = Math.round(z * 100) + '%';
   }
 
   function sendView() {
-    Padrao.send({ t: 'view', x: S.view.x, y: S.view.y, z: S.view.z });
+    const { x, y, z } = S.view;
+    Padrao.send({ t: 'view', x, y, z });
+    /* Transform usado pelo compositor para reposicionar as janelas:
+     *   screen_x = (window_x * scale) + offset_x
+     *   screen_y = (window_y * scale) + offset_y
+     * O offset e a posicao da origem do mundo na tela. */
+    Padrao.send({ t: 'canvas_transform', scale: z, offset_x: -x * z, offset_y: -y * z });
     scheduleSave();
   }
 
   function zoomAt(sx, sy, factor) {
     const before = screenToWorld(sx, sy);
     S.view.z = clamp(S.view.z * factor, 0.15, 4);
-    S.view.x = before.x - sx / S.view.z;
-    S.view.y = before.y - sy / S.view.z;
+    S.view.x = before.x - sx;
+    S.view.y = before.y - sy;
     applyView();
     sendView();
   }
@@ -499,6 +508,11 @@
           w0.x = nw.x; w0.y = nw.y;
           updateWinGeom(w0);
           Padrao.send({ t: 'win_move', id: w.id, x: nw.x, y: nw.y });
+          /* o mesmo movimento, em lote (cluster/tiling) */
+          Padrao.send({
+            t: 'cluster_update',
+            placements: [{ id: w.id, x: nw.x, y: nw.y }],
+          });
         });
       });
       el.addEventListener('click', (e) => {
@@ -556,7 +570,9 @@
     itemsLayer.innerHTML = '';
     for (const it of S.items) mountItem(it);
     (e.wins || []).forEach((w) => { S.wins.set(w.id, w); renderWin(w); });
-    if (!e.saved || !e.saved.canvas) sendView();
+    /* sempre: o compositor precisa do transform (zoom + offset) para
+     * reposicionar as janelas junto com o canvas */
+    sendView();
   });
 
   Padrao.on('view', (e) => {

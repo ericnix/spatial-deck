@@ -37,39 +37,42 @@ size_t padrao_json_escape(char *dst, size_t cap, const char *src) {
 	return n;
 }
 
-/* Localiza `"key"` no nível superior (ignora strings/objetos aninhados). */
+/* Localiza `"key"` no nivel superior (ignora strings/objetos aninhados). */
 static const char *find_key(const char *json, const char *key) {
 	if (!json || !key) return NULL;
 	size_t klen = strlen(key);
 	int depth = 0;
 	bool in_str = false;
 
-	for (const char *p = json; *p; p++) {
+	const char *p = json;
+	/* a chave procurada e do objeto de topo: as chaves dele ficam no
+	 * nivel 0, entao o '{' de abertura nao conta como aninhamento */
+	if (*p == '{' || *p == '[') p++;
+
+	for (; *p; p++) {
 		char c = *p;
 		if (in_str) {
 			if (c == '\\') { p++; continue; }
 			if (c == '"') in_str = false;
 			continue;
 		}
+		if (c == '{' || c == '[') { depth++; continue; }
+		if (c == '}' || c == ']') { if (depth > 0) depth--; continue; }
 		if (c == '"') {
 			if (depth == 0 && strncmp(p + 1, key, klen) == 0
-					&& p[1 + klen] == '"' ) {
+					&& p[1 + klen] == '"') {
 				const char *q = p + 2 + klen;
 				while (*q == ' ' || *q == '\t') q++;
 				if (*q == ':') return q + 1;
 			}
-			/* início de string comum */
-			p++; /* loop p++ avança; processar como string */
-			/* marca e consome até o fecho */
+			/* string comum: consome ate o fecho */
+			p++;
 			while (*p) {
-				if (*p == '\\') { p++; }
+				if (*p == '\\') p++;
 				else if (*p == '"') break;
 				p++;
 			}
-			continue;
 		}
-		if (c == '{' || c == '[') depth++;
-		else if (c == '}' || c == ']') { if (depth > 0) depth--; }
 	}
 	return NULL;
 }

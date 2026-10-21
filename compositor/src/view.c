@@ -25,17 +25,77 @@ static inline bool list_is_first(struct wl_list *elem, struct wl_list *head) {
 	return elem == head->next;
 }
 
+/* Posicao de uma janela na tela, a partir do transform do canvas:
+ *   screen_x = (window_x * scale) + offset_x
+ *   screen_y = (window_y * scale) + offset_y
+ * O no do scene graph usa coordenadas LOGICAS (a escala da saida aplica
+ * o resto), por isso a divisao pela escala. */
 void padrao_apply_camera_view(struct padrao_view *view) {
 	if (!view->tree) return;
-	int sx = (int)lround(view->wx - view->server->view_x);
-	int sy = (int)lround(view->wy - view->server->view_y);
-	wlr_scene_node_set_position(&view->tree->node, sx, sy);
+	struct padrao_server *server = view->server;
+	double scale = server->canvas_scale > 0 ? server->canvas_scale : 1.0;
+	double sx = view->wx * scale + server->canvas_off_x;
+	double sy = view->wy * scale + server->canvas_off_y;
+	wlr_scene_node_set_position(&view->tree->node,
+		(int)lround(sx / scale), (int)lround(sy / scale));
 }
 
 void padrao_apply_camera_all(struct padrao_server *server) {
 	struct padrao_view *view;
 	wl_list_for_each(view, &server->views, link) {
 		padrao_apply_camera_view(view);
+	}
+	padrao_schedule_frame(server);
+}
+
+/* Reposiciona as janelas conforme a transformação do canvas:
+ *
+ *   screen_x = (window_x * scale) + offset_x
+ *   screen_y = (window_y * scale) + offset_y
+ *
+ * A posição do nó do scene graph é LÓGICA (a escala da saída aplica o
+ * resto), por isso dividimos pela escala antes de posicionar. O offset
+ * vem em px de tela, então também é convertido. */
+void padrao_apply_canvas_transform(struct padrao_server *server) {
+	struct padrao_view *view;
+	wl_list_for_each(view, &server->views, link) {
+		padrao_apply_camera_view(view);
+	}
+	padrao_schedule_frame(server);
+}
+
+/* Cluster/tiling: reposiciona um conjunto de janelas de uma vez.
+ * O placements é o texto JSON de uma lista:
+ *   [{"id":1,"x":10,"y":20}, ...]
+ * As coordenadas são do mundo (as mesmas do canvas). */
+void padrao_apply_cluster(struct padrao_server *server, const char *placements) {
+	if (!placements) return;
+	const char *p = placements;
+	while ((p = strchr(p, '{')) != NULL) {
+		const char *end = strchr(p, '}');
+		if (!end) break;
+		char obj[512];
+		size_t n = (size_t)(end - p) + 1;
+		if (n >= sizeof(obj)) n = sizeof(obj) - 1;
+		memcpy(obj, p, n);
+		obj[n] = '\0';
+
+		long id;
+		double x, y;
+		if (padrao_json_get_int(obj, "id", &id)
+				&& padrao_json_get_num(obj, "x", &x)
+				&& padrao_json_get_num(obj, "y", &y)) {
+			struct padrao_view *view;
+			wl_list_for_each(view, &server->views, link) {
+				if ((long)(uintptr_t)view != id) continue;
+				view->wx = x;
+				view->wy = y;
+				padrao_apply_camera_view(view);
+				padrao_broadcast_win(server, view);
+				break;
+			}
+		}
+		p = end + 1;
 	}
 	padrao_schedule_frame(server);
 }

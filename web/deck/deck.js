@@ -310,6 +310,8 @@
     renderWins();
   });
   Padrao.on('apps', (e) => { S.apps = e.apps || []; renderFavs(); renderResults(); });
+  /* lista completa de aplicativos (varredura de .desktop do host) */
+  Padrao.on('app_list', (e) => { S.apps = e.apps || []; renderFavs(); renderResults(); });
   Padrao.on('view', (e) => { zoomChip.textContent = Math.round(e.z * 100) + '%'; });
   Padrao.on('output', (e) => {
     S.out = { w: e.w, h: e.h };

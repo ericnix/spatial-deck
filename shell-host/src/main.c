@@ -265,6 +265,11 @@ void host_handle_js(HostPage *page, const char *json) {
 		host_send_compositor("%s", json);
 		return;
 	}
+	/* transform do canvas e cluster/tiling: repassados ao compositor */
+	if (strcmp(t, "canvas_transform") == 0 || strcmp(t, "cluster_update") == 0) {
+		host_send_compositor("%s", json);
+		return;
+	}
 	if (strcmp(t, "save") == 0) {
 		char key[64] = "canvas";
 		jx_str(json, "key", key, sizeof(key));
@@ -642,50 +647,133 @@ static void prerender(const char *key) {
 	}
 }
 
-void apps_scan(void) {
-	GList *list = g_app_info_get_all();
-	GString *s = g_string_new("[");
-	guint n = 0;
+/* ------------------------- varredura de .desktop ------------------------- */
+/* Lê TODOS os .desktop de /usr/share/applications,
+ * /usr/local/share/applications e ~/.local/share/applications.
+ * A única regra de descarte é NoDisplay=true (o resto — Hidden, TryExec,
+ * categorias — continua visível), e a lista sai ordenada pelo nome. */
 
+typedef struct {
+	char *id;
+	char *name;
+	char *exec;
+	char *icon;
+} AppEntry;
+
+static void app_entry_free(gpointer p) {
+	AppEntry *e = p;
+	g_free(e->id);
+	g_free(e->name);
+	g_free(e->exec);
+	g_free(e->icon);
+	g_free(e);
+}
+
+static int app_entry_cmp(gconstpointer a, gconstpointer b) {
+	const AppEntry *ea = a;
+	const AppEntry *eb = b;
+	return g_utf8_collate(ea->name ? ea->name : "", eb->name ? eb->name : "");
+}
+
+/* Nomes de icone do tema por app (via GIO): o Icon= do .desktop nem
+ * sempre e um nome do tema - as vezes e um caminho. A rota /icon usa esta
+ * tabela para achar o icone real. */
+static void scan_icon_names(void) {
+	if (!g_app_icons) return;
+	GList *list = g_app_info_get_all();
 	for (GList *l = list; l; l = l->next) {
 		GAppInfo *info = l->data;
-		if (!g_app_info_should_show(info)) continue;
 		const char *id = g_app_info_get_id(info);
 		if (!id) continue;
-
 		char *stripped = strip_desktop(id);
-		const char *name = g_app_info_get_display_name(info);
-		char **icon_names = icon_names_of(info);
-		if (icon_names)
-			g_hash_table_insert(g_app_icons, g_strdup(stripped),
-				g_strdupv(icon_names));
-		const char *icon = (icon_names && icon_names[0])
-			? icon_names[0] : stripped;
+		char **names = icon_names_of(info);
+		if (names) {
+			g_hash_table_insert(g_app_icons, stripped, names);
+		} else {
+			g_free(stripped);
+		}
+	}
+	g_list_free_full(list, g_object_unref);
+}
 
-		char eid[512], ename[512], eicon[512];
-		jx_escape(eid, sizeof(eid), stripped);
-		jx_escape(ename, sizeof(ename), name ? name : stripped);
-		jx_escape(eicon, sizeof(eicon), icon);
+static void scan_desktop_dir(const char *dir, GPtrArray *out) {
+	GDir *d = g_dir_open(dir, 0, NULL);
+	if (!d) return;
+	const char *fname;
+	while ((fname = g_dir_read_name(d))) {
+		if (!g_str_has_suffix(fname, ".desktop")) continue;
+		char *path = g_build_filename(dir, fname, NULL);
+		GKeyFile *kf = g_key_file_new();
+		GError *err = NULL;
+		if (g_key_file_load_from_file(kf, path, G_KEY_FILE_NONE, &err)) {
+			if (!g_key_file_get_boolean(kf, "Desktop Entry", "NoDisplay", NULL)) {
+				AppEntry *e = g_new0(AppEntry, 1);
+				e->id = strip_desktop(fname);
+				e->name = g_key_file_get_string(kf, "Desktop Entry", "Name", NULL);
+				e->exec = g_key_file_get_string(kf, "Desktop Entry", "Exec", NULL);
+				e->icon = g_key_file_get_string(kf, "Desktop Entry", "Icon", NULL);
+				if (!e->name) e->name = g_strdup(e->id);
+				/* Icon= pode ser um caminho absoluto: nesse caso o id
+				 * (que a rota /icon resolve pelo g_app_icons) e melhor */
+				if (!e->icon || strchr(e->icon, '/')) {
+					g_free(e->icon);
+					e->icon = g_strdup(e->id);
+				}
+				g_ptr_array_add(out, e);
+			}
+		} else if (err) {
+			g_error_free(err);
+		}
+		g_key_file_free(kf);
+		g_free(path);
+	}
+	g_dir_close(d);
+}
 
-		if (n++) g_string_append_c(s, ',');
+void apps_scan(void) {
+	scan_icon_names();
+	GPtrArray *arr = g_ptr_array_new_with_free_func(app_entry_free);
+	scan_desktop_dir("/usr/share/applications", arr);
+	scan_desktop_dir("/usr/local/share/applications", arr);
+	char *home_apps = g_build_filename(g_get_home_dir(), ".local", "share",
+		"applications", NULL);
+	scan_desktop_dir(home_apps, arr);
+	g_free(home_apps);
+	/* ordena pelo nome (g_list_sort passa o elemento, ao contrario do
+	 * g_ptr_array_sort desta GLib, que passa o endereco do slot) */
+	GList *sorted = NULL;
+	for (guint i = 0; i < arr->len; i++) {
+		sorted = g_list_prepend(sorted, g_ptr_array_index(arr, i));
+	}
+	sorted = g_list_sort(sorted, (GCompareFunc)app_entry_cmp);
+
+	GString *s = g_string_new("[");
+	for (GList *l = sorted; l; l = l->next) {
+		AppEntry *e = l->data;
+		gboolean first = (l->prev == NULL);
+		char eid[512], ename[512], eicon[512], eexec[1024];
+		jx_escape(eid, sizeof(eid), e->id);
+		jx_escape(ename, sizeof(ename), e->name);
+		jx_escape(eicon, sizeof(eicon), e->icon ? e->icon : e->id);
+		jx_escape(eexec, sizeof(eexec), e->exec ? e->exec : "");
+		if (!first) g_string_append_c(s, ',');
 		g_string_append_printf(s,
-			"{\"id\":\"%s\",\"name\":\"%s\",\"icon\":\"%s\",\"fav\":%s}",
-			eid, ename, eicon,
-			is_fav(stripped, name) ? "true" : "false");
+			"{\"id\":\"%s\",\"name\":\"%s\",\"icon\":\"%s\","
+			"\"exec\":\"%s\",\"fav\":%s}",
+			eid, ename, eicon, eexec,
+			is_fav(e->id, e->name) ? "true" : "false");
 
-		prerender(stripped);
-		if (g_strcmp0(icon, stripped) != 0) prerender(icon);
-
-		g_free(stripped);
-		g_strfreev(icon_names);
+		prerender(e->id);
+		if (e->icon && g_strcmp0(e->icon, e->id) != 0) prerender(e->icon);
 	}
 	g_string_append_c(s, ']');
-	g_list_free_full(list, g_object_unref);
+	g_list_free(sorted);
+	g_ptr_array_free(arr, TRUE);
 
 	g_free(apps_json);
 	apps_json = g_string_free(s, FALSE);
 
-	char *ev = g_strdup_printf("{\"t\":\"apps\",\"apps\":%s}",
+	char *ev = g_strdup_printf("{\"t\":\"app_list\",\"apps\":%s}",
 		apps_json ? apps_json : "[]");
 	host_emit_all(ev);
 	g_free(ev);

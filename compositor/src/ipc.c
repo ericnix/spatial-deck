@@ -153,10 +153,47 @@ static void handle_line(struct padrao_server *server, const char *line) {
 		if (has_x) server->view_x = nearbyint(x);
 		if (has_y) server->view_y = nearbyint(y);
 		if (has_z) padrao_apply_zoom(server, z);
+		/* camera (unidades do mundo) -> transform em px de tela */
+		server->canvas_scale = server->zoom > 0 ? server->zoom : 1.0;
+		server->canvas_off_x = -server->view_x * server->canvas_scale;
+		server->canvas_off_y = -server->view_y * server->canvas_scale;
 		padrao_ipc_broadcastf(server,
 			"{\"t\":\"view\",\"x\":%.0f,\"y\":%.0f,\"z\":%g}",
 			server->view_x, server->view_y, server->zoom);
 		padrao_apply_camera_all(server);
+		return;
+	}
+	/* Transform do canvas: o zoom e o deslocamento da câmera em px de
+	 * tela. Cada janela é reposicionada para
+	 *   screen_x = (window_x * scale) + offset_x
+	 *   screen_y = (window_y * scale) + offset_y
+	 * e a escala visual é a da saída (as janelas acompanham o zoom). */
+	if (strcmp(t, "canvas_transform") == 0) {
+		double scale, off_x, off_y;
+		if (!padrao_json_get_num(line, "scale", &scale)) return;
+		if (!padrao_json_get_num(line, "offset_x", &off_x)) off_x = 0;
+		if (!padrao_json_get_num(line, "offset_y", &off_y)) off_y = 0;
+		if (scale <= 0) return;
+		server->canvas_scale = scale;
+		server->canvas_off_x = off_x;
+		server->canvas_off_y = off_y;
+		padrao_apply_zoom(server, scale);
+		padrao_apply_canvas_transform(server);
+		padrao_ipc_broadcastf(server,
+			"{\"t\":\"canvas_transform\",\"scale\":%g,"
+			"\"offset_x\":%g,\"offset_y\":%g}",
+			scale, off_x, off_y);
+		return;
+	}
+	/* Cluster/tiling: reposiciona um conjunto de janelas de uma vez. */
+	if (strcmp(t, "cluster_update") == 0) {
+		const char *start;
+		size_t len;
+		if (!padrao_json_get_raw(line, "placements", &start, &len)) return;
+		char *arr = strndup(start, len);
+		if (!arr) return;
+		padrao_apply_cluster(server, arr);
+		free(arr);
 		return;
 	}
 	if (strcmp(t, "win_move") == 0) {

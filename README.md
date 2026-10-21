@@ -141,6 +141,45 @@ as páginas JS via `Padrao.emit(<json>)`, e reúne os comandos vindos da UI
 
 Contrato das mensagens está descrito em `shell-host/src/padrao_host.h`.
 
+### Transform do canvas e cluster (tiling)
+
+O canvas manda ao compositor a transformação em uso, e o compositor
+reposiciona cada janela para que ela acompanhe o zoom exatamente:
+
+```jsonc
+// canvas -> host -> compositor
+{ "t": "canvas_transform",
+  "scale": 1.4,              // zoom
+  "offset_x": -185, "offset_y": 227 }   // origem do mundo, em px de tela
+
+{ "t": "cluster_update",
+  "placements": [ { "id": 7, "x": -260, "y": -160 } ] }   // tiling em lote
+```
+
+Com isso, a posição de cada janela na tela é
+
+```
+screen_x = (window_x * scale) + offset_x
+screen_y = (window_y * scale) + offset_y
+```
+
+A escala visual é a da **saída** (o zoom do canvas), então as janelas
+crescem junto com o canvas.
+
+### Lista de aplicativos
+
+O shell-host varre **todos** os `.desktop` de `/usr/share/applications`,
+`/usr/local/share/applications` e `~/.local/share/applications`, extrai
+`Name`, `Exec` e `Icon`, ordena alfabeticamente e descarta apenas o que tem
+`NoDisplay=true`. A lista completa vai para a UI:
+
+```jsonc
+{ "t": "app_list", "apps": [ { "id": "firefox", "name": "Firefox",
+  "icon": "firefox", "exec": "firefox %u" } ] }
+```
+
+O deck consome esse evento e desenha a grade dinamicamente.
+
 ## Por que aninhado
 
 O compositor roda como uma janela normal dentro da sessão KDE/GNOME atual, o
