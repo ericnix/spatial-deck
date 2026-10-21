@@ -37,6 +37,13 @@ static void output_frame(struct wl_listener *listener, void *data) {
 	/* comite sempre: o screencopy agenda frames próprios e pode pedir
 	   um commit que o teste de needs_frame sozinho não antecipa */
 	wlr_scene_output_commit(output->scene_output, NULL);
+	/* O wlroots 0.20 só limpa needs_frame quando habilita/desabilita a
+	 * saída. Com ele marcado, wlr_output_update_needs_frame() não emite
+	 * mais o sinal needs_frame e o scene output para de agendar frames —
+	 * aí o screencopy (grim/padrao-shot) fica esperando um commit que
+	 * nunca chega e a captura trava. Limpando depois do commit, cada
+	 * pedido de frame volta a ser agendado. */
+	output->wlr_output->needs_frame = false;
 	struct timespec now;
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	wlr_scene_output_send_frame_done(output->scene_output, &now);
