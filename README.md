@@ -36,6 +36,17 @@ make tools/padrao-shot
 WAYLAND_DISPLAY=padrao ./tools/padrao-shot saida.png
 ```
 
+E para capturar os **estados do deck** (o crescido e a grade de aplicativos)
+de uma vez, com o desktop já rodando:
+
+```sh
+./run.sh &          # o compositor precisa estar no ar
+tools/capturar.sh   # a porta do host é lida do log
+```
+
+O script usa o gancho `/debug/emit` (abaixo) para forçar cada estado e
+grava em `docs/screenshots/`.
+
 ### Gancho de depuração
 
 O host expõe uma rota só em loopback que injeta um evento `Padrao.emit()` numa
