@@ -101,6 +101,40 @@ WAYLAND_DISPLAY=spatial-deck cargo run -p compositor --example layer_test -- --t
 O exemplo fica em `compositor/examples/layer_test.rs` e serve de cliente mínimo
 para depurar os dois protocolos sem depender de uma barra completa.
 
+### Serviços D-Bus (`shell-services`)
+
+O crate `shell-services` (binário `spatial-deck-services`) é o cérebro D-Bus do
+shell. Roda ao lado do compositor, conectado ao socket Unix; o compositor
+repassa as mensagens entre as conexões Unix e WebSocket sem eco para quem
+enviou. Sobe junto com `./run-rust.sh` e não derruba o desktop se cair.
+
+Primeira função: daemon `org.freedesktop.Notifications`, com histórico, DND e
+expiração.
+
+| Item | Detalhe |
+| --- | --- |
+| Binário | `target/debug/spatial-deck-services` |
+| Log | `/tmp/spatial-deck-services.log` |
+| Nome D-Bus | `org.freedesktop.Notifications`; se estiver ocupado pelo daemon da sessão, cai para `org.freedesktop.Notifications.SpatialDeck` |
+| Substituir o daemon da sessão | `SPATIAL_DECK_NOTIFY_REPLACE=1 ./run-rust.sh` |
+| Histórico | `~/.config/spatial-deck/notifications.json` (últimas 100) |
+| Capacidades | `actions`, `body`, `body-markup`, `icon-static`, `persistence` |
+
+Teste sem roubar o nome do daemon da sessão:
+
+```sh
+gdbus call --session \
+  --dest org.freedesktop.Notifications.SpatialDeck \
+  --object-path /org/freedesktop/Notifications \
+  --method org.freedesktop.Notifications.Notify \
+  "Teste" 0 "dialog-information" "Resumo" "Corpo" "[]" "{}" 3000
+```
+
+Com o nome padrão livre (`dbus-run-session`, por exemplo), `notify-send` e
+qualquer aplicativo funcionam direto. Mensagens IPC: `notification`,
+`notification_closed`, `notification_action`, `dnd_state`,
+`notification_history` e `notification_history_request`.
+
 ### Temas do frontend Rust
 
 | Tema | Nome | Visual |
@@ -256,6 +290,11 @@ frontend os reposiciona na mesma área útil. Assim o botão **Visão geral** nu
 fica inerte numa área de trabalho vazia.
 
 ### Contrato IPC
+
+O socket Unix e o WebSocket compartilham um barramento: mensagens de um
+cliente são repassadas às demais conexões (sem eco para o remetente) e o
+compositor publica as suas. É assim que o `shell-services` entrega
+notificações ao frontend e recebe de volta DND, ações e fechamentos.
 
 O JSON é internamente marcado por `type` (snake_case):
 

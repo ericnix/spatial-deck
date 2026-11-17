@@ -54,6 +54,55 @@ Entregue no compositor Rust (Smithay 0.7):
   responsabilidade do `LayerMap` do Smithay e foi validada com cliente real;
   não houve mensagem IPC nova para justificar round-trip serde.
 
+## Etapa 2 — `shell-services` + daemon de notificações — CONCLUÍDA
+
+- Crate `shell-services` (binário `spatial-deck-services`, tokio + zbus 6.3),
+  membro do workspace.
+- Barramento IPC com origem: `(u64, IpcMessage)`. Conexões Unix e WebSocket
+  recebem mensagens das outras sem eco; o compositor publica com origem 0.
+  Notificações são apenas roteadas pelo compositor.
+- Servidor D-Bus `org.freedesktop.Notifications` em
+  `/org/freedesktop/Notifications`: `Notify` (actions, urgency, icon,
+  expire_timeout, replaces_id), `CloseNotification`, `GetCapabilities`,
+  `GetServerInformation`; sinais `NotificationClosed` e `ActionInvoked`.
+- Nome padrão ocupado pelo daemon da sessão → fallback
+  `org.freedesktop.Notifications.SpatialDeck`; `SPATIAL_DECK_NOTIFY_REPLACE=1`
+  tenta substituir. O processo nunca derruba o desktop.
+- Histórico (limite 100) e DND persistidos em
+  `~/.config/spatial-deck/notifications.json`.
+- Expiração num tick de 250 ms; motivos 1 (expirada), 2 (descartada pela UI)
+  e 3 (`CloseNotification`).
+- IPC novo em `common/`: `Notification`, `NotificationClosed`,
+  `NotificationAction`, `DndState`, `NotificationHistory`,
+  `NotificationHistoryRequest` + testes de round-trip.
+- `run-rust.sh` sobe e encerra o serviço; log em
+  `/tmp/spatial-deck-services.log`; queda do serviço não encerra o desktop.
+
+### Evidências de teste (17/11/2026)
+
+- `cargo test --workspace` verde; 11 testes no `shell-services`, incluindo
+  D-Bus real (`Notify` → mensagem IPC; `CloseNotification` →
+  `NotificationClosed`).
+- Desktop rodando: `gdbus Notify` no nome alternativo → cliente Unix recebeu
+  `{"type":"notification","id":1,...}`.
+- Expiração de 800 ms → `notification_closed` com `reason: 1`.
+- `NotificationHistoryRequest` → `notification_history` + `dnd_state`; DND
+  ligado → `dnd_state.active = true`.
+- `dbus-run-session` + `notify-send` → daemon assumiu o nome padrão e o socket
+  recebeu `{"type":"notification","id":3,"app_name":"notify-send",...}`.
+- Log do desktop sem WARN/ERROR; o shell loga apenas o aviso esperado de nome
+  D-Bus ocupado.
+
+### Limitações
+
+- O frontend ainda não desenha notificações (etapa 3); mensagens
+  desconhecidas são ignoradas com segurança (`from_json` falha → return).
+- Corpo com markup é repassado cru; sanitização é da etapa 3.
+- Ações: `ActionInvoked` é emitido, mas o frontend ainda não tem botões.
+- Duas instâncias (ex.: teste em `dbus-run-session`) compartilham o mesmo
+  arquivo de histórico; não há lock.
+
 ## Próxima etapa
 
-Etapa 2 — crate `shell-services` + daemon de notificações. Nada iniciado.
+Etapa 3 — UI de notificações no frontend (popups, histórico, DND). Nada
+iniciado.

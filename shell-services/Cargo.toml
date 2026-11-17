@@ -1,0 +1,23 @@
+[package]
+name = "shell-services"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Serviços D-Bus do shell do Spatial Deck (notificações, tray, sistema)"
+
+[[bin]]
+name = "spatial-deck-services"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+common.workspace = true
+dirs = "7"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus = "6"

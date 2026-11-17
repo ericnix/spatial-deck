@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["common", "compositor", "frontend"]
+members = ["common", "compositor", "frontend", "shell-services"]
 
 [workspace.package]
 version = "0.1.0"

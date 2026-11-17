@@ -24,15 +24,18 @@ export RUST_LOG="${RUST_LOG:-info}"
 
 COMP_LOG="${TMPDIR:-/tmp}/spatial-deck.log"
 SHELL_LOG="${TMPDIR:-/tmp}/spatial-deck-shell.log"
+SERV_LOG="${TMPDIR:-/tmp}/spatial-deck-services.log"
 SOCK="/tmp/spatial-deck.sock"
 RUNTIME="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR ausente}"
 URL="${SPATIAL_DECK_URL:-http://127.0.0.1:7338/?theme=${SPATIAL_DECK_THEME:-default}}"
 COMP_PID=""
 SHELL_PID=""
+SERV_PID=""
 GUARD_PID=""
 
 cleanup() {
 	[ -n "$GUARD_PID" ] && kill "$GUARD_PID" 2>/dev/null || true
+	[ -n "$SERV_PID" ] && kill "$SERV_PID" 2>/dev/null || true
 	[ -n "$SHELL_PID" ] && kill "$SHELL_PID" 2>/dev/null || true
 	[ -n "$COMP_PID" ] && kill "$COMP_PID" 2>/dev/null || true
 	wait 2>/dev/null || true
@@ -71,8 +74,14 @@ GDK_BACKEND=wayland \
 	./target/spatial-deck-shell "$URL" >"$SHELL_LOG" 2>&1 &
 SHELL_PID=$!
 
+# Serviços D-Bus do shell (notificações). Não entra no vigia: se ele cair, o
+# desktop continua funcionando sem notificações.
+echo "[run-rust] serviços D-Bus (log: $SERV_LOG)"
+./target/debug/spatial-deck-services >"$SERV_LOG" 2>&1 &
+SERV_PID=$!
+
 echo "[run-rust] Spatial Deck rodando — WAYLAND_DISPLAY=spatial-deck, UI=$URL"
-echo "[run-rust] Ctrl-C encerra (compositor + shell)"
+echo "[run-rust] Ctrl-C encerra (compositor + shell + serviços)"
 
 # Traz a janela do compositor para a frente. Sem isso o gerenciador de
 # janelas pode abri-la atrás do terminal, e os cliques do mouse vão para a
@@ -101,6 +110,10 @@ fi
 
 # Se um dos dois cair, encerra o outro.
 while kill -0 "$COMP_PID" 2>/dev/null && kill -0 "$SHELL_PID" 2>/dev/null; do
+	if [ -n "$SERV_PID" ] && ! kill -0 "$SERV_PID" 2>/dev/null; then
+		echo "[run-rust] serviços D-Bus saíram (log: $SERV_LOG)" >&2
+		SERV_PID=""
+	fi
 	sleep 0.5
 done
 

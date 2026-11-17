@@ -86,6 +86,40 @@ pub enum IpcMessage {
     /// Aviso curto do compositor para o shell (toast do HUD). Usado quando
     /// uma ação não tem efeito, como abrir a visão geral sem janelas reais.
     Toast { message: String },
+
+    /// Notificação entregue pelo `shell-services` ao shell (popup + histórico).
+    Notification {
+        id: u32,
+        app_name: String,
+        summary: String,
+        body: String,
+        /// Nome de ícone freedesktop ou caminho absoluto.
+        icon: String,
+        /// 0 = baixa, 1 = normal, 2 = crítica.
+        urgency: u8,
+        #[serde(default)]
+        actions: Vec<NotificationButton>,
+        /// Milissegundos até expirar: `0` nunca, `-1` usa o padrão do servidor.
+        timeout: i32,
+        /// Id da notificação substituída; `0` quando é nova.
+        replaces_id: u32,
+    },
+
+    /// Notificação fechada (expirou, foi descartada ou fechada por chamada).
+    NotificationClosed { id: u32, reason: u32 },
+
+    /// Ação de uma notificação acionada no shell.
+    NotificationAction { id: u32, action: String },
+
+    /// "Não perturbe" ligado/desligado. O estado é o resultado, não um toggle,
+    /// para que a mensagem possa ser reentregue sem efeitos colaterais.
+    DndState { active: bool },
+
+    /// Histórico completo de notificações, enviado pelo `shell-services`.
+    NotificationHistory { items: Vec<NotificationItem> },
+
+    /// Pedido do shell para receber histórico e DND ao abrir a página.
+    NotificationHistoryRequest,
 }
 
 /// Ações de zoom pedidas pelo compositor ao frontend.
@@ -106,6 +140,37 @@ pub struct DesktopApp {
     pub exec: String,
     pub icon: String,
 }
+
+/// Botão de ação de uma notificação, na ordem em que o cliente o enviou
+/// (pares `id`/`label` do protocolo `org.freedesktop.Notifications`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationButton {
+    pub key: String,
+    pub label: String,
+}
+
+/// Notificação guardada no histórico do shell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotificationItem {
+    pub id: u32,
+    pub app_name: String,
+    pub summary: String,
+    pub body: String,
+    pub icon: String,
+    pub urgency: u8,
+    #[serde(default)]
+    pub actions: Vec<NotificationButton>,
+    /// Instante de chegada, em milissegundos desde a epoch Unix.
+    pub timestamp_ms: u64,
+}
+
+/// Motivos de fechamento do protocolo de notificações.
+pub const NOTIFICATION_CLOSED_EXPIRED: u32 = 1;
+pub const NOTIFICATION_CLOSED_DISMISSED: u32 = 2;
+pub const NOTIFICATION_CLOSED_BY_CALL: u32 = 3;
+
+/// Caminho do socket IPC nativo do compositor (JSON por linha).
+pub const IPC_SOCKET_PATH: &str = "/tmp/spatial-deck.sock";
 
 /// Calcula a pontuação de busca do launcher. Quanto maior, melhor.
 ///
@@ -407,5 +472,84 @@ mod tests {
             IpcMessage::from_json(&msg.to_json().unwrap()).unwrap(),
             msg
         );
+    }
+
+    #[test]
+    fn notification_round_trip() {
+        let msg = IpcMessage::Notification {
+            id: 7,
+            app_name: "Firefox".into(),
+            summary: "Download concluído".into(),
+            body: "<b>arquivo.iso</b>".into(),
+            icon: "firefox".into(),
+            urgency: 2,
+            actions: vec![
+                NotificationButton {
+                    key: "default".into(),
+                    label: "Abrir".into(),
+                },
+                NotificationButton {
+                    key: "dismiss".into(),
+                    label: "Dispensar".into(),
+                },
+            ],
+            timeout: -1,
+            replaces_id: 0,
+        };
+        let json = msg.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification\""));
+        assert!(json.contains("\"actions\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), msg);
+    }
+
+    #[test]
+    fn notification_events_round_trip() {
+        let closed = IpcMessage::NotificationClosed {
+            id: 7,
+            reason: NOTIFICATION_CLOSED_EXPIRED,
+        };
+        let json = closed.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification_closed\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), closed);
+
+        let action = IpcMessage::NotificationAction {
+            id: 7,
+            action: "default".into(),
+        };
+        let json = action.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification_action\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), action);
+
+        let dnd = IpcMessage::DndState { active: true };
+        let json = dnd.to_json().unwrap();
+        assert!(json.contains("\"type\":\"dnd_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), dnd);
+    }
+
+    #[test]
+    fn notification_history_round_trip() {
+        let msg = IpcMessage::NotificationHistory {
+            items: vec![NotificationItem {
+                id: 1,
+                app_name: "Terminal".into(),
+                summary: "Comando terminou".into(),
+                body: "make".into(),
+                icon: "utilities-terminal".into(),
+                urgency: 1,
+                actions: vec![NotificationButton {
+                    key: "default".into(),
+                    label: "Ver".into(),
+                }],
+                timestamp_ms: 1_760_000_000_000,
+            }],
+        };
+        let json = msg.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification_history\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), msg);
+
+        let request = IpcMessage::NotificationHistoryRequest;
+        let json = request.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification_history_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
     }
 }

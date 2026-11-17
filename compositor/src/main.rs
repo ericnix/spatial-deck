@@ -21,7 +21,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, atomic::AtomicU64},
     time::{Duration, Instant},
 };
 
@@ -154,6 +154,18 @@ const Z_MAXIMIZED: u8 = 20;
 const Z_DIALOG: u8 = 30;
 /// `app_id` do cliente GTK/WebKit que hospeda a interface do desktop.
 const SHELL_APP_ID: &str = "spatial-deck-shell";
+
+/// Item do barramento IPC: `(origem, mensagem)`. A origem é o id da conexão
+/// que produziu a mensagem; `IPC_SOURCE_COMPOSITOR` marca as do compositor.
+/// Cada conexão ignora as próprias mensagens para não receber eco.
+type Broadcast = (u64, IpcMessage);
+const IPC_SOURCE_COMPOSITOR: u64 = 0;
+/// Ids de conexão IPC (Unix e WebSocket) começam em 1.
+static NEXT_IPC_CLIENT: AtomicU64 = AtomicU64::new(1);
+
+fn next_ipc_client_id() -> u64 {
+    NEXT_IPC_CLIENT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 fn main() -> Result<()> {
     if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
@@ -492,14 +504,14 @@ struct App {
     theme: CanvasTheme,
     ipc: mpsc::Receiver<IpcMessage>,
     /// Envia atualizações de posição para os clientes WebSocket conectados.
-    broadcast: broadcast::Sender<IpcMessage>,
+    broadcast: broadcast::Sender<Broadcast>,
 }
 
 impl App {
     fn new(
         display: &smithay::reexports::wayland_server::DisplayHandle,
         ipc: mpsc::Receiver<IpcMessage>,
-        broadcast: broadcast::Sender<IpcMessage>,
+        broadcast: broadcast::Sender<Broadcast>,
     ) -> Result<Self> {
         let compositor_state = CompositorState::new::<Self>(display);
         let xdg_shell_state = XdgShellState::new::<Self>(display);
@@ -1427,9 +1439,13 @@ impl App {
                 }
             })
             .collect();
-        let _ = self
-            .broadcast
-            .send(IpcMessage::ClusterUpdate { placements });
+        self.publish(IpcMessage::ClusterUpdate { placements });
+    }
+
+    /// Publica uma mensagem originada pelo compositor para todas as conexões
+    /// IPC (WebSocket do frontend e clientes Unix, como o `shell-services`).
+    fn publish(&self, message: IpcMessage) {
+        let _ = self.broadcast.send((IPC_SOURCE_COMPOSITOR, message));
     }
 
     fn begin_move(
@@ -1571,7 +1587,7 @@ impl App {
             .as_ref()
             .map(|overview| overview.cells.len())
             .unwrap_or(0);
-        let _ = self.broadcast.send(IpcMessage::OverviewState {
+        self.publish(IpcMessage::OverviewState {
             active: self.overview.is_some(),
             windows,
         });
@@ -1769,6 +1785,16 @@ impl App {
             IpcMessage::Toast { .. } => {
                 // Mensagem enviada pelo compositor; ignorada se ecoada.
             }
+            IpcMessage::Notification { .. }
+            | IpcMessage::NotificationClosed { .. }
+            | IpcMessage::NotificationAction { .. }
+            | IpcMessage::DndState { .. }
+            | IpcMessage::NotificationHistory { .. }
+            | IpcMessage::NotificationHistoryRequest => {
+                // Notificações são roteadas pelo barramento IPC entre o
+                // `shell-services` (Unix) e o frontend (WebSocket). O
+                // compositor não precisa agir sobre elas.
+            }
         }
     }
 
@@ -1776,7 +1802,7 @@ impl App {
         let Some(managed) = self.windows.iter().find(|w| w.id == window_id) else {
             debug!(window_id, "CloseWindow para janela inexistente");
             // Cartão sem janela real (demonstração): remove só o cartão.
-            let _ = self.broadcast.send(IpcMessage::WindowClosed { window_id });
+            self.publish(IpcMessage::WindowClosed { window_id });
             return;
         };
         if let Some(toplevel) = managed.window.toplevel().cloned() {
@@ -1858,7 +1884,7 @@ impl App {
             }
             Err(error) => {
                 warn!(exec, %error, "falha ao iniciar aplicativo");
-                let _ = self.broadcast.send(IpcMessage::Toast {
+                self.publish(IpcMessage::Toast {
                     message: format!("Não foi possível iniciar: {exec}"),
                 });
             }
@@ -2055,9 +2081,7 @@ impl App {
                 self.focus_window(next);
             }
         }
-        let _ = self
-            .broadcast
-            .send(IpcMessage::WindowClosed { window_id: managed.id });
+        self.publish(IpcMessage::WindowClosed { window_id: managed.id });
         self.refresh_overview();
         self.apply_layout();
     }
@@ -2902,7 +2926,7 @@ impl XdgShellHandler for App {
                 }
             }
             info!(id = managed.id, "janela destruída");
-            let _ = self.broadcast.send(IpcMessage::WindowClosed {
+            self.publish(IpcMessage::WindowClosed {
                 window_id: managed.id,
             });
             self.popup_manager.cleanup();
@@ -3047,7 +3071,7 @@ impl XdgActivationHandler for App {
 
 fn run_compositor(
     ipc: mpsc::Receiver<IpcMessage>,
-    broadcast: broadcast::Sender<IpcMessage>,
+    broadcast: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
     let mut display: Display<App> = Display::new()?;
     let display_handle = display.handle();
@@ -3163,7 +3187,7 @@ fn run_compositor(
                                 if state.overview.is_some() {
                                     state.exit_overview();
                                 }
-                                let _ = state.broadcast.send(IpcMessage::ZoomCanvas { action });
+                                state.publish(IpcMessage::ZoomCanvas { action });
                                 return FilterResult::Intercept(());
                             }
                         }
@@ -3735,7 +3759,7 @@ fn remove_wayland_socket() {
 fn start_ipc_runtime(
     tx: mpsc::Sender<IpcMessage>,
     apps: Arc<Vec<DesktopApp>>,
-) -> Result<broadcast::Sender<IpcMessage>> {
+) -> Result<broadcast::Sender<Broadcast>> {
     let web_root = env::var("SPATIAL_DECK_WEB_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
@@ -3747,7 +3771,7 @@ fn start_ipc_runtime(
 
     // Atualizações de posição saem do compositor para todos os clientes
     // WebSocket (ex.: quando a janela real é arrastada).
-    let (broadcast_tx, _) = broadcast::channel::<IpcMessage>(64);
+    let (broadcast_tx, _) = broadcast::channel::<Broadcast>(64);
     let broadcast_thread = broadcast_tx.clone();
 
     std::thread::Builder::new()
@@ -3779,7 +3803,7 @@ async fn run_ipc_servers(
     tx: mpsc::Sender<IpcMessage>,
     apps: Arc<Vec<DesktopApp>>,
     web_root: PathBuf,
-    broadcast_tx: broadcast::Sender<IpcMessage>,
+    broadcast_tx: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
     let _ = fs::remove_file(IPC_SOCKET);
     let unix = UnixListener::bind(IPC_SOCKET)
@@ -3835,8 +3859,9 @@ async fn run_ipc_servers(
         let (stream, _peer) = unix.accept().await?;
         let tx = tx.clone();
         let apps = apps.clone();
+        let broadcast_tx = broadcast_tx.clone();
         tokio::spawn(async move {
-            if let Err(error) = handle_unix_client(stream, tx, apps).await {
+            if let Err(error) = handle_unix_client(stream, tx, apps, broadcast_tx).await {
                 debug!("cliente Unix encerrado: {error:#}");
             }
         });
@@ -3847,8 +3872,12 @@ async fn handle_unix_client(
     stream: tokio::net::UnixStream,
     tx: mpsc::Sender<IpcMessage>,
     apps: Arc<Vec<DesktopApp>>,
+    broadcast_tx: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
+    let client_id = next_ipc_client_id();
     let (read_half, mut write_half) = stream.into_split();
+    let mut broadcast_rx = broadcast_tx.subscribe();
+
     let hello = IpcMessage::AppList {
         apps: (*apps).clone(),
     }
@@ -3857,18 +3886,43 @@ async fn handle_unix_client(
     write_half.write_all(b"\n").await?;
 
     let mut lines = BufReader::new(read_half).lines();
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match IpcMessage::from_json(line) {
-            Ok(message) => {
-                if tx.send(message).is_err() {
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                let Some(line) = line? else {
                     break;
+                };
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                match IpcMessage::from_json(line) {
+                    Ok(message) => {
+                        // Repassa aos demais clientes (ex.: notificações do
+                        // `shell-services` para o frontend) antes de entregar
+                        // ao compositor. O remetente não recebe o próprio eco.
+                        let _ = broadcast_tx.send((client_id, message.clone()));
+                        if tx.send(message).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => warn!("mensagem IPC Unix inválida: {error}"),
                 }
             }
-            Err(error) => warn!("mensagem IPC Unix inválida: {error}"),
+            message = broadcast_rx.recv() => {
+                match message {
+                    Ok((source, message)) if source != client_id => {
+                        let json = message.to_json()?;
+                        write_half.write_all(json.as_bytes()).await?;
+                        write_half.write_all(b"\n").await?;
+                    }
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        debug!(skipped, "atualizações IPC atrasadas no socket Unix");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
         }
     }
     Ok(())
@@ -3878,8 +3932,9 @@ async fn handle_websocket(
     stream: TcpStream,
     tx: mpsc::Sender<IpcMessage>,
     apps: Arc<Vec<DesktopApp>>,
-    broadcast_tx: broadcast::Sender<IpcMessage>,
+    broadcast_tx: broadcast::Sender<Broadcast>,
 ) -> Result<()> {
+    let client_id = next_ipc_client_id();
     let websocket = accept_async(stream).await.context("handshake WebSocket")?;
     let (mut sink, mut source) = websocket.split();
     let mut broadcast_rx = broadcast_tx.subscribe();
@@ -3899,6 +3954,9 @@ async fn handle_websocket(
                 match frame? {
                     Message::Text(text) => match IpcMessage::from_json(text.as_str()) {
                         Ok(message) => {
+                            // Mesmo barramento do socket Unix: o frontend
+                            // também entrega mensagens ao `shell-services`.
+                            let _ = broadcast_tx.send((client_id, message.clone()));
                             if tx.send(message).is_err() {
                                 break;
                             }
@@ -3912,10 +3970,11 @@ async fn handle_websocket(
             }
             message = broadcast_rx.recv() => {
                 match message {
-                    Ok(message) => {
+                    Ok((source, message)) if source != client_id => {
                         let json = message.to_json()?;
                         sink.send(Message::Text(json.into())).await?;
                     }
+                    Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         debug!(skipped, "atualizações IPC atrasadas");
                     }
