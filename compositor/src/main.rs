@@ -1791,7 +1791,13 @@ impl App {
             | IpcMessage::NotificationHold { .. }
             | IpcMessage::DndState { .. }
             | IpcMessage::NotificationHistory { .. }
-            | IpcMessage::NotificationHistoryRequest => {
+            | IpcMessage::NotificationHistoryRequest
+            | IpcMessage::RegionList { .. }
+            | IpcMessage::RegionListRequest
+            | IpcMessage::SaveRegion { .. }
+            | IpcMessage::RegionSaved { .. }
+            | IpcMessage::GotoRegion { .. }
+            | IpcMessage::DeleteRegion { .. } => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.

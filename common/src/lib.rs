@@ -124,6 +124,30 @@ pub enum IpcMessage {
 
     /// Pedido do shell para receber histórico e DND ao abrir a página.
     NotificationHistoryRequest,
+
+    /// Regiões do canvas (viewpoints nomeados), enviadas pelos serviços.
+    RegionList { regions: Vec<CanvasRegion> },
+
+    /// Pedido do shell para receber as regiões persistidas.
+    RegionListRequest,
+
+    /// Salva a transformação atual como uma região com nome.
+    SaveRegion {
+        name: String,
+        scale: f64,
+        offset_x: f64,
+        offset_y: f64,
+    },
+
+    /// Região criada/atualizada pelos serviços.
+    RegionSaved { region: CanvasRegion },
+
+    /// Pede para o shell animar até a região. Também pode vir de um cliente
+    /// externo (barra, atalho) e é atendido pelo frontend.
+    GotoRegion { id: u32 },
+
+    /// Remove uma região persistida.
+    DeleteRegion { id: u32 },
 }
 
 /// Ações de zoom pedidas pelo compositor ao frontend.
@@ -172,6 +196,27 @@ pub struct NotificationItem {
 pub const NOTIFICATION_CLOSED_EXPIRED: u32 = 1;
 pub const NOTIFICATION_CLOSED_DISMISSED: u32 = 2;
 pub const NOTIFICATION_CLOSED_BY_CALL: u32 = 3;
+
+/// Região do canvas: um enquadramento nomeado (`screen = world * scale +
+/// offset`). Substitui o conceito de workspaces no modelo espacial.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CanvasRegion {
+    pub id: u32,
+    pub name: String,
+    pub scale: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+}
+
+impl CanvasRegion {
+    /// Distância aproximada entre a região e uma transformação atual, em
+    /// pixels de tela. Serve para destacar a região ativa na barra.
+    pub fn distance(&self, scale: f64, offset_x: f64, offset_y: f64) -> f64 {
+        let scale_penalty = ((self.scale - scale).abs() * 1_000.0).min(400.0);
+        scale_penalty
+            + ((self.offset_x - offset_x).powi(2) + (self.offset_y - offset_y).powi(2)).sqrt()
+    }
+}
 
 /// Caminho do socket IPC nativo do compositor (JSON por linha).
 pub const IPC_SOCKET_PATH: &str = "/tmp/spatial-deck.sock";
@@ -563,5 +608,69 @@ mod tests {
         let json = request.to_json().unwrap();
         assert!(json.contains("\"type\":\"notification_history_request\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
+    }
+
+    #[test]
+    fn region_messages_round_trip() {
+        let region = CanvasRegion {
+            id: 2,
+            name: "Trabalho".into(),
+            scale: 1.25,
+            offset_x: -340.0,
+            offset_y: 120.5,
+        };
+
+        let list = IpcMessage::RegionList {
+            regions: vec![region.clone()],
+        };
+        let json = list.to_json().unwrap();
+        assert!(json.contains("\"type\":\"region_list\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), list);
+
+        let request = IpcMessage::RegionListRequest;
+        let json = request.to_json().unwrap();
+        assert!(json.contains("\"type\":\"region_list_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
+
+        let save = IpcMessage::SaveRegion {
+            name: "Trabalho".into(),
+            scale: 1.25,
+            offset_x: -340.0,
+            offset_y: 120.5,
+        };
+        let json = save.to_json().unwrap();
+        assert!(json.contains("\"type\":\"save_region\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), save);
+
+        let saved = IpcMessage::RegionSaved {
+            region: region.clone(),
+        };
+        let json = saved.to_json().unwrap();
+        assert!(json.contains("\"type\":\"region_saved\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), saved);
+
+        let goto = IpcMessage::GotoRegion { id: 2 };
+        let json = goto.to_json().unwrap();
+        assert!(json.contains("\"type\":\"goto_region\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), goto);
+
+        let delete = IpcMessage::DeleteRegion { id: 2 };
+        let json = delete.to_json().unwrap();
+        assert!(json.contains("\"type\":\"delete_region\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), delete);
+    }
+
+    #[test]
+    fn region_distance_prefers_near_transform() {
+        let region = CanvasRegion {
+            id: 1,
+            name: "A".into(),
+            scale: 1.0,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        };
+        assert_eq!(region.distance(1.0, 0.0, 0.0), 0.0);
+        assert!(region.distance(1.0, 30.0, 40.0) > 49.0);
+        assert!(region.distance(2.0, 0.0, 0.0) >= 400.0);
     }
 }

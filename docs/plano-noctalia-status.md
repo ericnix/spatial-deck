@@ -144,7 +144,49 @@ Entregue no compositor Rust (Smithay 0.7):
 - Corpo não renderiza HTML por segurança (markup vira texto).
 - Acentos/emoji dependem das fontes do WebKitGTK.
 
+## Etapa 4 — Barra modular, relógio/calendário e regiões — CONCLUÍDA
+
+- HUD reorganizado em três grupos (esquerda/centro/direita) com módulos
+  movidos por `append_child`; config em `localStorage` (`spatial-deck.bar`)
+  com slot por módulo, ordem (↑/↓) e relógio 12/24h.
+- Painel **Barra** com um `<select>` por módulo (Esquerda/Centro/Direita/
+  Oculto) e checkbox de 24h; reaplica e persiste a cada mudança.
+- Tema virou módulo compacto: botão "Tema: …" abre a lista dos cinco chips.
+- Relógio no centro (hora + data em pt-BR), ticker de 1 s; clique abre o
+  calendário mensal com navegação ‹ › e o dia de hoje destacado.
+- Regiões: `CanvasRegion` e mensagens `RegionList`, `RegionListRequest`,
+  `SaveRegion`, `RegionSaved`, `GotoRegion`, `DeleteRegion` em `common/` com
+  testes; `RegionStore` no `shell-services` persiste
+  `~/.config/spatial-deck/regions.json`.
+- Chips na barra com destaque da região ativa (distância do transform),
+  salvar via input inline, excluir pelo `×`, atalhos `Ctrl+1..9` e animação
+  de 250 ms (smoothstep) que o compositor acompanha a cada frame.
+- Popovers (calendário, temas, configuração) entram em `ChromeRects` e usam
+  `--popover-bg` opaco por tema.
+
+### Evidências de teste (17/11/2026)
+
+- `cargo test --workspace` verde (20 + 20 + 16).
+- Barra visível em 1920 e 1280; relógio central, calendário de Novembro/2026
+  com o dia 17 destacado; painel Barra com todos os módulos; menu de temas.
+- Duas regiões salvas por IPC e persistidas no JSON; chips apareceram com a
+  ativa destacada.
+- `gtk3-demo` (duas janelas) movidas por `cluster_update`: `goto_region` para
+  a região B levou o zoom a 60% e reposicionou as janelas reais; voltar para
+  a região A restaurou 100% e as posições.
+- Reinício do desktop: chips recarregados do JSON (persistência) e região
+  ativa recalculada.
+
+### Limitações
+
+- A interação com os `<select>`/setas da configuração da barra não foi
+  automatizada (sem injeção de clique no WebKit); o painel foi verificado
+  visualmente e o caminho persistir→reaplicar é direto.
+- Salvar região usa nome digitado no input inline; renomear não existe (exclui
+  e salva de novo).
+- Regiões não são sincronizadas entre duas instâncias do frontend além do
+  broadcast normal.
+
 ## Próxima etapa
 
-Etapa 4 — barra modular, relógio/calendário e regiões do canvas. Nada
-iniciado.
+Etapa 5 — tray (SNI) e mídia (MPRIS). Nada iniciado.

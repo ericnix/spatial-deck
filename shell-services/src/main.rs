@@ -10,6 +10,7 @@
 
 mod dbus;
 mod ipc;
+mod regions;
 mod store;
 
 use std::{
@@ -25,6 +26,7 @@ use zbus::object_server::SignalEmitter;
 
 use crate::{
     dbus::{Notifier, INTERFACE, NOTIFY_PATH},
+    regions::RegionStore,
     store::Store,
 };
 
@@ -34,6 +36,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let store = Arc::new(Mutex::new(Store::load()));
+    let regions = Arc::new(Mutex::new(RegionStore::load()));
     let (ipc_tx, ipc_rx) = mpsc::channel(64);
     let (incoming_tx, mut incoming_rx) = mpsc::channel(256);
 
@@ -64,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
                 let Some(message) = message else {
                     break;
                 };
-                handle(message, &store, &ipc_tx, &emitter).await;
+                handle(message, &store, &regions, &ipc_tx, &emitter).await;
             }
             _ = ticker.tick() => {
                 let expired = store.lock().await.expire_due(Instant::now());
@@ -92,14 +95,43 @@ async fn main() -> anyhow::Result<()> {
 async fn handle(
     message: IpcMessage,
     store: &Arc<Mutex<Store>>,
+    regions: &Arc<Mutex<RegionStore>>,
     ipc: &mpsc::Sender<IpcMessage>,
     emitter: &SignalEmitter<'static>,
 ) {
     match message {
         // O compositor manda AppList ao aceitar a conexão; o pedido explícito
         // vem do frontend quando a página abre ou recarrega.
-        IpcMessage::AppList { .. } | IpcMessage::NotificationHistoryRequest => {
+        IpcMessage::AppList { .. } => {
             announce(store, ipc).await;
+            send_regions(regions, ipc).await;
+        }
+        IpcMessage::NotificationHistoryRequest => {
+            announce(store, ipc).await;
+        }
+        IpcMessage::RegionListRequest => {
+            send_regions(regions, ipc).await;
+        }
+        IpcMessage::SaveRegion {
+            name,
+            scale,
+            offset_x,
+            offset_y,
+        } => {
+            let region = regions
+                .lock()
+                .await
+                .save(&name, scale, offset_x, offset_y);
+            let _ = ipc.send(IpcMessage::RegionSaved { region }).await;
+            send_regions(regions, ipc).await;
+        }
+        IpcMessage::DeleteRegion { id } => {
+            if regions.lock().await.delete(id) {
+                send_regions(regions, ipc).await;
+            }
+        }
+        IpcMessage::GotoRegion { .. } => {
+            // O frontend anima a transformação; o daemon só mantém a lista.
         }
         IpcMessage::DndState { active } => {
             store.lock().await.set_dnd(active);
@@ -125,6 +157,12 @@ async fn handle(
         }
         _ => {}
     }
+}
+
+/// Envia a lista de regiões para todos os clientes.
+async fn send_regions(regions: &Arc<Mutex<RegionStore>>, ipc: &mpsc::Sender<IpcMessage>) {
+    let regions = regions.lock().await.list();
+    let _ = ipc.send(IpcMessage::RegionList { regions }).await;
 }
 
 /// Envia o histórico e o estado de DND para quem estiver escutando.

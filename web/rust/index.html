@@ -62,29 +62,91 @@ screen_y = world_y * scale + offset_y</pre>
   <div id="active-window-glow" aria-hidden="true"></div>
 
   <header id="hud">
-    <div class="brand">SPATIAL DECK <span>rust/wasm</span></div>
-    <div class="hud__sep"></div>
-    <div id="status" class="status">conectando…</div>
-    <div class="hud__spacer"></div>
-    <div class="themes" role="group" aria-label="Tema do canvas">
-      <button id="theme-default" class="theme-chip" data-theme="default" aria-pressed="true">Padrão</button>
-      <button id="theme-minimalist" class="theme-chip" data-theme="minimalist" aria-pressed="false">Minimalista</button>
-      <button id="theme-minimalist-dark" class="theme-chip" data-theme="minimalist-dark" aria-pressed="false">Minimalista Negro</button>
-      <button id="theme-oxidized-iron" class="theme-chip" data-theme="oxidized-iron" aria-pressed="false">Ferro Oxidado</button>
-      <button id="theme-nord" class="theme-chip" data-theme="nord" aria-pressed="false">Nord</button>
+    <div id="bar-left" class="bar__group">
+      <div class="brand">SPATIAL DECK <span>rust/wasm</span></div>
+      <div class="hud__sep"></div>
+
+      <div id="bar-mod-status" class="bar__module">
+        <div id="status" class="status">conectando…</div>
+      </div>
+
+      <div id="bar-mod-regions" class="bar__module bar-regions">
+        <div id="region-chips" class="region-chips" role="group" aria-label="Regiões do canvas"></div>
+        <button id="region-save" class="region-btn" type="button" title="Salvar a vista atual como região">+</button>
+        <form id="region-save-form" class="region-form" hidden>
+          <input id="region-name" type="text" maxlength="40" placeholder="nome da região" aria-label="Nome da região">
+          <button type="submit" class="region-btn" title="Salvar (Enter)">✓</button>
+          <button id="region-cancel" type="button" class="region-btn" title="Cancelar (Esc)">×</button>
+        </form>
+      </div>
     </div>
-    <div class="hud__sep"></div>
-    <div class="zoom" role="group" aria-label="Zoom do canvas">
-      <button id="zoom-out" class="zoom-btn" type="button" title="Diminuir zoom (Ctrl+-)" aria-label="Diminuir zoom">−</button>
-      <span>zoom <b id="zoom">100%</b></span>
-      <button id="zoom-in" class="zoom-btn" type="button" title="Aumentar zoom (Ctrl+=)" aria-label="Aumentar zoom">+</button>
-      <button id="zoom-reset" class="zoom-btn zoom-btn--text" type="button" title="Voltar para 100% (Ctrl+0)">1:1</button>
-      <button id="zoom-fit" class="zoom-btn zoom-btn--text" type="button" title="Enquadrar tudo (Ctrl+Shift+F)">Ajustar</button>
+
+    <div id="bar-center" class="bar__group bar__group--center">
+      <div id="bar-mod-clock" class="bar__module bar-clock">
+        <button id="clock-btn" class="clock-btn" type="button" aria-expanded="false" title="Calendário">
+          <b id="clock-time">--:--</b>
+          <span id="clock-date"></span>
+        </button>
+        <div id="calendar-popover" class="calendar" hidden>
+          <header class="calendar__head">
+            <button id="calendar-prev" class="region-btn" type="button" aria-label="Mês anterior">‹</button>
+            <b id="calendar-label"></b>
+            <button id="calendar-next" class="region-btn" type="button" aria-label="Próximo mês">›</button>
+          </header>
+          <div class="calendar__week">
+            <span>D</span><span>S</span><span>T</span><span>Q</span><span>Q</span><span>S</span><span>S</span>
+          </div>
+          <div id="calendar-grid" class="calendar__grid"></div>
+        </div>
+      </div>
     </div>
-    <div class="hud__sep"></div>
-    <button id="dnd-btn" class="hud-action" type="button" aria-pressed="false" title="Não perturbe (silencia notificações normais)">DND</button>
-    <button id="notifications-btn" class="hud-action" type="button" aria-expanded="false" title="Histórico de notificações">Avisos <b id="notifications-count" class="hud-badge" hidden>0</b></button>
-    <button id="overview-btn" class="hud-action" type="button" aria-pressed="false" title="Visão geral das janelas (Ctrl+Alt+O)">Visão geral</button>
+
+    <div id="bar-right" class="bar__group bar__group--end">
+      <div id="bar-mod-themes" class="bar__module">
+        <div class="theme-menu">
+          <button id="theme-menu-btn" class="hud-action" type="button" aria-expanded="false" title="Tema do canvas">Tema: <b id="theme-label">Padrão</b></button>
+          <div id="theme-popover" class="bar-popover bar-popover--right" hidden>
+            <div class="themes themes--stack" role="group" aria-label="Tema do canvas">
+              <button id="theme-default" class="theme-chip" data-theme="default" aria-pressed="true">Padrão</button>
+              <button id="theme-minimalist" class="theme-chip" data-theme="minimalist" aria-pressed="false">Minimalista</button>
+              <button id="theme-minimalist-dark" class="theme-chip" data-theme="minimalist-dark" aria-pressed="false">Minimalista Negro</button>
+              <button id="theme-oxidized-iron" class="theme-chip" data-theme="oxidized-iron" aria-pressed="false">Ferro Oxidado</button>
+              <button id="theme-nord" class="theme-chip" data-theme="nord" aria-pressed="false">Nord</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="bar-mod-zoom" class="bar__module">
+        <div class="zoom" role="group" aria-label="Zoom do canvas">
+          <button id="zoom-out" class="zoom-btn" type="button" title="Diminuir zoom (Ctrl+-)" aria-label="Diminuir zoom">−</button>
+          <span>zoom <b id="zoom">100%</b></span>
+          <button id="zoom-in" class="zoom-btn" type="button" title="Aumentar zoom (Ctrl+=)" aria-label="Aumentar zoom">+</button>
+          <button id="zoom-reset" class="zoom-btn zoom-btn--text" type="button" title="Voltar para 100% (Ctrl+0)">1:1</button>
+          <button id="zoom-fit" class="zoom-btn zoom-btn--text" type="button" title="Enquadrar tudo (Ctrl+Shift+F)">Ajustar</button>
+        </div>
+      </div>
+
+      <div id="bar-mod-notifications" class="bar__module">
+        <button id="dnd-btn" class="hud-action" type="button" aria-pressed="false" title="Não perturbe (silencia notificações normais)">DND</button>
+        <button id="notifications-btn" class="hud-action" type="button" aria-expanded="false" title="Histórico de notificações">Avisos <b id="notifications-count" class="hud-badge" hidden>0</b></button>
+      </div>
+
+      <div id="bar-mod-overview" class="bar__module">
+        <button id="overview-btn" class="hud-action" type="button" aria-pressed="false" title="Visão geral das janelas (Ctrl+Alt+O)">Visão geral</button>
+      </div>
+
+      <div id="bar-mod-settings" class="bar__module">
+        <div class="bar-settings-wrap">
+          <button id="bar-settings-btn" class="hud-action" type="button" aria-expanded="false" title="Configurar a barra">Barra</button>
+          <div id="bar-settings-panel" class="bar-popover bar-popover--right bar-settings" hidden>
+            <p class="bar-settings__title">Módulos da barra</p>
+            <div id="bar-settings-list"></div>
+            <label class="bar-settings__check"><input id="bar-hour24" type="checkbox" checked> Relógio em 24h</label>
+          </div>
+        </div>
+      </div>
+    </div>
   </header>
 
   <div id="deck-shell">

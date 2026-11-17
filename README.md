@@ -17,7 +17,7 @@ vídeos.
 | --- | --- |
 | `common/` | Contrato IPC compartilhado (`IpcMessage`, `DesktopApp`, `ClusterPlacement`) e `CanvasTheme` com `serde`. |
 | `compositor/` | Compositor Wayland com **Smithay 0.7** e backend aninhado **winit**; `Space<Window>` para as janelas `xdg_toplevel`; servidor Tokio com socket Unix, WebSocket e HTTP estático; bordas dos temas Minimalistas em `minimalist_render.rs`. |
-| `frontend/` | Frontend **wasm-bindgen + web-sys**: canvas HTML5, pan/zoom, temas, glow da janela ativa, IPC WebSocket, camada SVG de desenho/imagens e deck trapezoidal de ferramentas/aplicativos; CSS e grid de papel milimetrado em `minimalist_theme.rs` (claro) e `minimalist_dark_theme.rs` (negro). |
+| `frontend/` | Frontend **wasm-bindgen + web-sys**: canvas HTML5, pan/zoom, temas, glow da janela ativa, barra modular (relógio/calendário, regiões), IPC WebSocket, camada SVG de desenho/imagens e deck trapezoidal de ferramentas/aplicativos; CSS e grid de papel milimetrado em `minimalist_theme.rs` (claro) e `minimalist_dark_theme.rs` (negro). |
 | `shell-rust/` | Cliente C **GTK3 + WebKitGTK** (`spatial-deck-shell`) que hospeda a página dentro do compositor. É uma janela sem decoração; o compositor a reconhece pelo `app_id` `spatial-deck-shell`, fixa em `(0,0)` no tamanho da saída, desenha abaixo das janelas dos apps e a exclui do pan/zoom e do posicionamento do canvas. |
 
 ### Build
@@ -153,6 +153,40 @@ qualquer aplicativo funcionam direto. Mensagens IPC: `notification`,
   escapado — não é renderizado como HTML.
 - Popups e painel entram em `ChromeRects`, então ficam acima das janelas reais
   e recebem cliques; os vãos entre popups continuam clicáveis no canvas.
+
+### Barra de módulos
+
+O HUD é uma barra com três grupos (esquerda/centro/direita). O botão **Barra**
+abre a configuração: cada módulo pode ir para esquerda, centro, direita ou
+ficar oculto, e as setas ↑/↓ mudam a ordem dentro do grupo. A escolha fica em
+`localStorage` (`spatial-deck.bar`), junto com o formato 12/24h do relógio.
+
+| Módulo | Conteúdo |
+| --- | --- |
+| Regiões | chips das regiões do canvas e `+` para salvar a vista atual |
+| Relógio | hora/data; clique abre o calendário mensal (‹ ›, hoje destacado) |
+| Status | estado da conexão IPC |
+| Temas | botão compacto com a lista dos cinco temas |
+| Zoom | −, porcentagem, +, 1:1 e Ajustar |
+| Notificações | DND e histórico |
+| Visão geral | miniaturas das janelas |
+
+Módulos ocultos continuam existindo no DOM (só perdem o espaço na barra);
+todos os atalhos e funcionalidades seguem valendo.
+
+### Regiões do canvas
+
+No lugar de workspaces, o desktop usa **regiões**: enquadramentos nomeados com
+`scale`, `offset_x` e `offset_y`. O `+` salva a vista atual; clicar no chip
+anima o canvas até ela em ~250 ms (smoothstep) e o compositor move as janelas
+reais junto. `Ctrl+1..9` vai para as primeiras nove regiões e o chip da região
+ativa fica destacado por proximidade do transform atual.
+
+As regiões são persistidas pelo `shell-services` em
+`~/.config/spatial-deck/regions.json` e trafegam por IPC (`region_list`,
+`region_list_request`, `save_region`, `region_saved`, `goto_region`,
+`delete_region`). Um `goto_region` vindo de outro cliente também é atendido pelo
+frontend.
 
 ### Temas do frontend Rust
 

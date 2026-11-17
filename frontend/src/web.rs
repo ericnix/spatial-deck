@@ -16,14 +16,16 @@ use std::{
 };
 
 use common::{
-    fuzzy_score, push_recent, toggle_favorite, CanvasTheme, CanvasZoom, ChromeRect,
+    fuzzy_score, push_recent, toggle_favorite, CanvasRegion, CanvasTheme, CanvasZoom, ChromeRect,
     ClusterPlacement, DesktopApp, IpcMessage, NotificationButton, NotificationItem,
     NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
 };
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use web_sys::{
     CanvasRenderingContext2d, CloseEvent, Document, DomRect, Element, Event, HtmlCanvasElement,
-    HtmlInputElement, KeyboardEvent, MessageEvent, PointerEvent, WebSocket, WheelEvent, Window,
+    HtmlInputElement, HtmlSelectElement, KeyboardEvent, MessageEvent, PointerEvent, WebSocket,
+    WheelEvent, Window,
 };
 
 use crate::{drawing, minimalist_dark_theme, minimalist_theme};
@@ -35,6 +37,38 @@ const RECENT_KEY: &str = "spatial-deck.recent";
 const RECENT_LIMIT: usize = 10;
 /// Histórico de notificações mantido na interface.
 const HISTORY_LIMIT: usize = 100;
+/// Configuração da barra (ordem/slots e formato do relógio).
+const BAR_KEY: &str = "spatial-deck.bar";
+
+/// Módulos da barra: id, rótulo e slot padrão.
+const BAR_MODULES: [(&str, &str, &str); 7] = [
+    ("regions", "Regiões", "left"),
+    ("clock", "Relógio", "center"),
+    ("status", "Status", "left"),
+    ("themes", "Temas", "right"),
+    ("zoom", "Zoom", "right"),
+    ("notifications", "Notificações", "right"),
+    ("overview", "Visão geral", "right"),
+];
+
+const WEEKDAYS: [&str; 7] = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const MONTHS: [&str; 12] = [
+    "jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez",
+];
+const MONTHS_FULL: [&str; 12] = [
+    "Janeiro",
+    "Fevereiro",
+    "Março",
+    "Abril",
+    "Maio",
+    "Junho",
+    "Julho",
+    "Agosto",
+    "Setembro",
+    "Outubro",
+    "Novembro",
+    "Dezembro",
+];
 const THEMES: [CanvasTheme; 5] = CanvasTheme::ALL;
 
 /// Altura da barra de título de uma janela real: 1px de borda + 38px da barra.
@@ -60,6 +94,48 @@ const CARDS: [Card; 4] = [
     Card { id: 3, x: 180.0, y: 640.0, w: 620.0, h: 420.0, has_window: false },
     Card { id: 4, x: 920.0, y: 600.0, w: 460.0, h: 320.0, has_window: false },
 ];
+
+/// Módulo da barra com o slot onde ele aparece.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BarModule {
+    id: String,
+    slot: String,
+}
+
+/// Configuração persistida em `localStorage` (`spatial-deck.bar`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BarConfig {
+    #[serde(default = "default_hour24")]
+    hour24: bool,
+    #[serde(default)]
+    modules: Vec<BarModule>,
+}
+
+fn default_hour24() -> bool {
+    true
+}
+
+impl Default for BarConfig {
+    fn default() -> Self {
+        Self {
+            hour24: true,
+            modules: BAR_MODULES
+                .iter()
+                .map(|(id, _, slot)| BarModule {
+                    id: (*id).to_owned(),
+                    slot: (*slot).to_owned(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Animação de transformação ao trocar de região (250 ms, smoothstep).
+struct TransformAnim {
+    start_ms: f64,
+    from: (f64, f64, f64),
+    to: (f64, f64, f64),
+}
 
 /// Popup visível de uma notificação, com o prazo individual.
 struct PopupState {
@@ -107,6 +183,15 @@ struct State {
     dnd: bool,
     /// Painel de histórico aberto.
     notif_panel_open: bool,
+    /// Configuração da barra (slots/ordem e relógio 24h).
+    bar: BarConfig,
+    /// Regiões do canvas recebidas dos serviços.
+    regions: Vec<CanvasRegion>,
+    /// Animação de transformação em andamento.
+    anim: Option<TransformAnim>,
+    /// Mês exibido no calendário (0-11) e ano.
+    calendar_year: i32,
+    calendar_month: u32,
 }
 
 impl Default for State {
@@ -136,6 +221,11 @@ impl Default for State {
             popups: Vec::new(),
             dnd: false,
             notif_panel_open: false,
+            bar: BarConfig::default(),
+            regions: Vec::new(),
+            anim: None,
+            calendar_year: 0,
+            calendar_month: 0,
         }
     }
 }
@@ -156,6 +246,7 @@ pub fn start() -> Result<(), JsValue> {
     apply_initial_theme(&window, &document)?;
     load_launcher_state(&window);
     setup_theme_buttons(&window, &document)?;
+    setup_bar(&window, &document)?;
     setup_canvas(&window, &document)?;
     setup_pan_zoom(&window, &document)?;
     setup_zoom_controls(&window, &document)?;
@@ -257,6 +348,16 @@ fn sync_theme_buttons(document: &Document, active: CanvasTheme) {
             let pressed = if theme == active { "true" } else { "false" };
             let _ = button.set_attribute("aria-pressed", pressed);
         }
+    }
+    if let Some(label) = document.get_element_by_id("theme-label") {
+        let text = match active {
+            CanvasTheme::Default => "Padrão",
+            CanvasTheme::Minimalist => "Minimalista",
+            CanvasTheme::MinimalistDark => "Minimalista Negro",
+            CanvasTheme::OxidizedIron => "Ferro Oxidado",
+            CanvasTheme::Nord => "Nord",
+        };
+        let _ = label.set_text_content(Some(text));
     }
 }
 
@@ -750,6 +851,20 @@ fn setup_zoom_controls(window: &Window, document: &Document) -> Result<(), JsVal
         if !(event.ctrl_key() || event.meta_key()) {
             return;
         }
+        // Ctrl+1..9 vai para as primeiras regiões do canvas.
+        let editing = doc
+            .active_element()
+            .map(|element| matches!(element.tag_name().as_str(), "INPUT" | "TEXTAREA"))
+            .unwrap_or(false);
+        if !editing && !event.shift_key() && !event.alt_key() {
+            if let Ok(index) = event.key().parse::<usize>() {
+                if (1..=9).contains(&index) {
+                    goto_region_by_index(index - 1);
+                    event.prevent_default();
+                    return;
+                }
+            }
+        }
         if event.shift_key() && event.key().eq_ignore_ascii_case("f") {
             fit_zoom(&win, &doc);
             event.prevent_default();
@@ -1194,6 +1309,7 @@ fn apply_transform(document: &Document) -> Result<(), JsValue> {
     drawing::set_view(scale, offset_x, offset_y, viewport_w, viewport_h);
     update_zoom_label(document, scale);
     update_glow(document)?;
+    update_region_active(document);
     maybe_auto_maximize();
     Ok(())
 }
@@ -1300,6 +1416,7 @@ fn connect_websocket() {
         send_cluster();
         send_theme();
         send_message(&IpcMessage::NotificationHistoryRequest);
+        send_message(&IpcMessage::RegionListRequest);
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             send_chrome_rects(&document);
         }
@@ -1403,11 +1520,18 @@ fn remove_card(window_id: u32) {
 /// elas fiquem acima das janelas reais e recebam os cliques.
 fn send_chrome_rects(document: &Document) {
     let mut rects = Vec::new();
-    for id in ["hud", "deck-shell", "app-drawer"] {
+    for id in [
+        "hud",
+        "deck-shell",
+        "app-drawer",
+        "calendar-popover",
+        "theme-popover",
+        "bar-settings-panel",
+    ] {
         let Some(element) = document.get_element_by_id(id) else {
             continue;
         };
-        if id == "app-drawer" && element.has_attribute("hidden") {
+        if element.has_attribute("hidden") {
             continue;
         }
         let rect: DomRect = element.get_bounding_client_rect();
@@ -1598,6 +1722,28 @@ fn handle_server_message(text: &str) {
                 let _ = render_notifications(&document);
             }
         }
+        IpcMessage::RegionList { regions } => {
+            STATE.with(|state| state.borrow_mut().regions = regions);
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_region_chips(&document);
+            }
+        }
+        IpcMessage::RegionSaved { region } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.regions.retain(|known| known.id != region.id);
+                state.regions.push(region);
+                state.regions.sort_by_key(|region| region.id);
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_region_chips(&document);
+            }
+        }
+        IpcMessage::GotoRegion { id } => {
+            // Pedido de um cliente externo (ou eco de outra aba): o frontend
+            // anima até a região; o compositor acompanha o CanvasTransform.
+            goto_region(id);
+        }
         IpcMessage::DndState { active } => {
             STATE.with(|state| state.borrow_mut().dnd = active);
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
@@ -1607,7 +1753,10 @@ fn handle_server_message(text: &str) {
         IpcMessage::CloseWindow { .. } => {}
         IpcMessage::NotificationAction { .. }
         | IpcMessage::NotificationHold { .. }
-        | IpcMessage::NotificationHistoryRequest => {}
+        | IpcMessage::NotificationHistoryRequest
+        | IpcMessage::RegionListRequest
+        | IpcMessage::SaveRegion { .. }
+        | IpcMessage::DeleteRegion { .. } => {}
         _ => {}
     }
 }
@@ -2171,6 +2320,696 @@ fn send_launch_app(exec: &str) {
     });
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Barra de módulos, relógio/calendário e regiões do canvas
+// ---------------------------------------------------------------------------
+
+impl BarConfig {
+    fn load(window: &Window) -> Self {
+        let Some(storage) = window.local_storage().ok().flatten() else {
+            return Self::default();
+        };
+        let Some(text) = storage.get_item(BAR_KEY).ok().flatten() else {
+            return Self::default();
+        };
+        let mut config: Self = serde_json::from_str(&text).unwrap_or_default();
+
+        // Garante todos os módulos conhecidos e descarta ids antigos.
+        config
+            .modules
+            .retain(|module| BAR_MODULES.iter().any(|(id, _, _)| *id == module.id));
+        for (id, _, slot) in BAR_MODULES {
+            if !config.modules.iter().any(|module| module.id == id) {
+                config.modules.push(BarModule {
+                    id: id.to_owned(),
+                    slot: slot.to_owned(),
+                });
+            }
+        }
+        for module in &mut config.modules {
+            if !matches!(module.slot.as_str(), "left" | "center" | "right" | "hidden") {
+                module.slot = "right".to_owned();
+            }
+        }
+        config
+    }
+
+    fn save(&self, window: &Window) {
+        if let Ok(Some(storage)) = window.local_storage() {
+            if let Ok(json) = serde_json::to_string(self) {
+                let _ = storage.set_item(BAR_KEY, &json);
+            }
+        }
+    }
+
+    fn label(id: &str) -> &'static str {
+        match BAR_MODULES.iter().find(|(module, _, _)| *module == id) {
+            Some((_, label, _)) => *label,
+            None => "Módulo",
+        }
+    }
+}
+
+fn setup_bar(window: &Window, document: &Document) -> Result<(), JsValue> {
+    let config = BarConfig::load(window);
+    STATE.with(|state| state.borrow_mut().bar = config.clone());
+    apply_bar_config(document, &config);
+    render_bar_settings(document, &config);
+
+    // Tema: botão compacto abre a lista de chips.
+    if let Ok(button) = by_id(document, "theme-menu-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = is_hidden(&document_for_click, "theme-popover");
+            close_popover_if_open(&document_for_click, "bar-settings-panel", "bar-settings-btn");
+            close_popover_if_open(&document_for_click, "calendar-popover", "clock-btn");
+            set_popover(&document_for_click, "theme-popover", "theme-menu-btn", open);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Configuração da barra.
+    if let Ok(button) = by_id(document, "bar-settings-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = is_hidden(&document_for_click, "bar-settings-panel");
+            close_popover_if_open(&document_for_click, "theme-popover", "theme-menu-btn");
+            close_popover_if_open(&document_for_click, "calendar-popover", "clock-btn");
+            set_popover(
+                &document_for_click,
+                "bar-settings-panel",
+                "bar-settings-btn",
+                open,
+            );
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Slots (change nos selects) e ordem (↑/↓).
+    if let Ok(panel) = by_id(document, "bar-settings-panel") {
+        let document_for_change = document.clone();
+        let change = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(select) = event
+                .target()
+                .and_then(|target| target.dyn_into::<HtmlSelectElement>().ok())
+            else {
+                return;
+            };
+            let Some(id) = select.get_attribute("data-bar-slot") else {
+                return;
+            };
+            let slot = select.value();
+            update_bar_slot(&document_for_change, &id, &slot);
+        });
+        panel.add_event_listener_with_callback("change", change.as_ref().unchecked_ref())?;
+        change.forget();
+
+        let document_for_move = document.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-bar-move]") else {
+                return;
+            };
+            let Some(id) = button.get_attribute("data-module") else {
+                return;
+            };
+            let Some(delta) = button
+                .get_attribute("data-bar-move")
+                .and_then(|value| value.parse::<i32>().ok())
+            else {
+                return;
+            };
+            move_bar_module(&document_for_move, &id, delta);
+        });
+        panel.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Relógio em 12/24h.
+    if let Ok(element) = by_id(document, "bar-hour24") {
+        let Ok(input) = element.dyn_into::<HtmlInputElement>() else {
+            return Ok(());
+        };
+        let input_for_change = input.clone();
+        let document_for_change = document.clone();
+        let window_for_change = window.clone();
+        let change = Closure::<dyn FnMut()>::new(move || {
+            let checked = input_for_change.checked();
+            let config = STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.bar.hour24 = checked;
+                state.bar.clone()
+            });
+            config.save(&window_for_change);
+            update_clock(&document_for_change);
+        });
+        input.add_event_listener_with_callback("change", change.as_ref().unchecked_ref())?;
+        change.forget();
+    }
+
+    let _ = bind_clock_and_calendar(document);
+    let _ = bind_regions(document);
+    start_clock_ticker();
+    start_animation_ticker();
+    update_clock(document);
+    let _ = render_region_chips(document);
+
+    Ok(())
+}
+
+fn is_hidden(document: &Document, id: &str) -> bool {
+    document
+        .get_element_by_id(id)
+        .map(|element| element.has_attribute("hidden"))
+        .unwrap_or(true)
+}
+
+fn set_popover(document: &Document, popover: &str, button: &str, open: bool) {
+    if let Some(element) = document.get_element_by_id(popover) {
+        if open {
+            let _ = element.remove_attribute("hidden");
+        } else {
+            let _ = element.set_attribute("hidden", "");
+        }
+    }
+    if let Some(element) = document.get_element_by_id(button) {
+        let _ = element.set_attribute("aria-expanded", if open { "true" } else { "false" });
+    }
+    if popover == "calendar-popover" && open {
+        render_calendar(document);
+    }
+    send_chrome_rects(document);
+}
+
+/// Fecha um popover da barra, se estiver aberto.
+fn close_popover_if_open(document: &Document, popover: &str, button: &str) {
+    if !is_hidden(document, popover) {
+        set_popover(document, popover, button, false);
+    }
+}
+
+fn apply_bar_config(document: &Document, config: &BarConfig) {
+    for module in &config.modules {
+        let Some(element) = document.get_element_by_id(&format!("bar-mod-{}", module.id)) else {
+            continue;
+        };
+        if module.slot == "hidden" {
+            let _ = element.set_attribute("hidden", "");
+            continue;
+        }
+        let _ = element.remove_attribute("hidden");
+        if let Some(parent) = document.get_element_by_id(&format!("bar-{}", module.slot)) {
+            let _ = parent.append_child(&element);
+        }
+    }
+}
+
+fn slot_select_html(slot: &str) -> String {
+    [
+        ("left", "Esquerda"),
+        ("center", "Centro"),
+        ("right", "Direita"),
+        ("hidden", "Oculto"),
+    ]
+    .iter()
+    .map(|(value, label)| {
+        format!(
+            "<option value=\"{value}\"{}>{label}</option>",
+            if *value == slot { " selected" } else { "" }
+        )
+    })
+    .collect::<String>()
+}
+
+fn render_bar_settings(document: &Document, config: &BarConfig) {
+    let html = config
+        .modules
+        .iter()
+        .map(|module| {
+            let id = escape_html(&module.id);
+            format!(
+                "<div class=\"bar-settings__row\">\
+                 <span class=\"bar-settings__name\">{label}</span>\
+                 <select data-bar-slot=\"{id}\">{options}</select>\
+                 <button type=\"button\" class=\"region-btn\" data-bar-move=\"-1\" data-module=\"{id}\" title=\"Mover para cima\">↑</button>\
+                 <button type=\"button\" class=\"region-btn\" data-bar-move=\"1\" data-module=\"{id}\" title=\"Mover para baixo\">↓</button>\
+                 </div>",
+                label = escape_html(BarConfig::label(&module.id)),
+                options = slot_select_html(&module.slot),
+            )
+        })
+        .collect::<String>();
+    if let Ok(list) = by_id(document, "bar-settings-list") {
+        let _ = list.set_inner_html(&html);
+    }
+    if let Some(element) = document.get_element_by_id("bar-hour24") {
+        if let Ok(input) = element.dyn_into::<HtmlInputElement>() {
+            input.set_checked(config.hour24);
+        }
+    }
+}
+
+fn persist_bar(config: &BarConfig) {
+    if let Some(window) = web_sys::window() {
+        config.save(&window);
+    }
+}
+
+fn update_bar_slot(document: &Document, id: &str, slot: &str) {
+    let config = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if let Some(module) = state.bar.modules.iter_mut().find(|module| module.id == id) {
+            module.slot = slot.to_owned();
+        }
+        state.bar.clone()
+    });
+    persist_bar(&config);
+    apply_bar_config(document, &config);
+    render_bar_settings(document, &config);
+    send_chrome_rects(document);
+}
+
+fn move_bar_module(document: &Document, id: &str, delta: i32) {
+    let config = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(index) = state.bar.modules.iter().position(|module| module.id == id) else {
+            return state.bar.clone();
+        };
+        let slot = state.bar.modules[index].slot.clone();
+        let same_slot: Vec<usize> = state
+            .bar
+            .modules
+            .iter()
+            .enumerate()
+            .filter(|(_, module)| module.slot == slot)
+            .map(|(index, _)| index)
+            .collect();
+        if let Some(position) = same_slot.iter().position(|candidate| *candidate == index) {
+            let target = (position as i32 + delta).clamp(0, same_slot.len() as i32 - 1) as usize;
+            if target != position {
+                state.bar.modules.swap(same_slot[position], same_slot[target]);
+            }
+        }
+        state.bar.clone()
+    });
+    persist_bar(&config);
+    apply_bar_config(document, &config);
+    render_bar_settings(document, &config);
+    send_chrome_rects(document);
+}
+
+fn bind_clock_and_calendar(document: &Document) -> Result<(), JsValue> {
+    if let Ok(button) = by_id(document, "clock-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = is_hidden(&document_for_click, "calendar-popover");
+            if open {
+                let now = js_sys::Date::new_0();
+                STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    state.calendar_year = now.get_full_year() as i32;
+                    state.calendar_month = now.get_month();
+                });
+            }
+            close_popover_if_open(&document_for_click, "theme-popover", "theme-menu-btn");
+            close_popover_if_open(&document_for_click, "bar-settings-panel", "bar-settings-btn");
+            set_popover(&document_for_click, "calendar-popover", "clock-btn", open);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    for (id, delta) in [("calendar-prev", -1_i32), ("calendar-next", 1_i32)] {
+        let Ok(button) = by_id(document, id) else {
+            continue;
+        };
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                let month = state.calendar_month as i32 + delta;
+                if month < 0 {
+                    state.calendar_month = 11;
+                    state.calendar_year -= 1;
+                } else if month > 11 {
+                    state.calendar_month = 0;
+                    state.calendar_year += 1;
+                } else {
+                    state.calendar_month = month as u32;
+                }
+            });
+            render_calendar(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+    Ok(())
+}
+
+fn render_calendar(document: &Document) {
+    let (year, month) = STATE.with(|state| {
+        let state = state.borrow();
+        (state.calendar_year, state.calendar_month)
+    });
+    if year == 0 {
+        return;
+    }
+
+    let first = js_sys::Date::new_with_year_month_day(year as u32, month as i32, 1);
+    let start = first.get_day();
+    let days =
+        js_sys::Date::new_with_year_month_day(year as u32, month as i32 + 1, 0).get_date();
+    let today = js_sys::Date::new_0();
+    let same_month = today.get_full_year() as i32 == year && today.get_month() == month;
+
+    let mut cells = String::new();
+    for _ in 0..start {
+        cells.push_str("<span class=\"calendar__day calendar__day--empty\"></span>");
+    }
+    for day in 1..=days {
+        let class = if same_month && today.get_date() == day {
+            "calendar__day calendar__day--today"
+        } else {
+            "calendar__day"
+        };
+        cells.push_str(&format!("<span class=\"{class}\">{day}</span>"));
+    }
+    let total = start + days;
+    let rest = (7 - (total % 7)) % 7;
+    for _ in 0..rest {
+        cells.push_str("<span class=\"calendar__day calendar__day--empty\"></span>");
+    }
+
+    if let Some(grid) = document.get_element_by_id("calendar-grid") {
+        grid.set_inner_html(&cells);
+    }
+    if let Some(label) = document.get_element_by_id("calendar-label") {
+        let text = format!("{} {}", MONTHS_FULL[month as usize], year);
+        let _ = label.set_text_content(Some(&text));
+    }
+}
+
+fn update_clock(document: &Document) {
+    let now = js_sys::Date::new_0();
+    let hour24 = STATE.with(|state| state.borrow().bar.hour24);
+    let hours = now.get_hours();
+    let minutes = now.get_minutes();
+    let time = if hour24 {
+        format!("{hours:02}:{minutes:02}")
+    } else {
+        let hour12 = if hours % 12 == 0 { 12 } else { hours % 12 };
+        let suffix = if hours < 12 { "AM" } else { "PM" };
+        format!("{hour12}:{minutes:02} {suffix}")
+    };
+    if let Some(element) = document.get_element_by_id("clock-time") {
+        let _ = element.set_text_content(Some(&time));
+    }
+    if let Some(element) = document.get_element_by_id("clock-date") {
+        let date = format!(
+            "{}, {} {}",
+            WEEKDAYS[now.get_day() as usize],
+            now.get_date(),
+            MONTHS[now.get_month() as usize]
+        );
+        let _ = element.set_text_content(Some(&date));
+    }
+}
+
+fn start_clock_ticker() {
+    let callback = Closure::<dyn FnMut()>::new(|| {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            update_clock(&document);
+        }
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            1_000,
+        );
+    }
+    callback.forget();
+}
+
+fn bind_regions(document: &Document) -> Result<(), JsValue> {
+    if let Ok(chips) = by_id(document, "region-chips") {
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(chip)) = target.closest("[data-region-id]") else {
+                return;
+            };
+            let Some(id) = chip
+                .get_attribute("data-region-id")
+                .and_then(|value| value.parse::<u32>().ok())
+            else {
+                return;
+            };
+            if target.closest("[data-region-delete]").ok().flatten().is_some() {
+                send_message(&IpcMessage::DeleteRegion { id });
+            } else {
+                goto_region(id);
+                send_message(&IpcMessage::GotoRegion { id });
+            }
+        });
+        chips.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "region-save") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            open_region_form(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(form) = by_id(document, "region-save-form") {
+        let document_for_submit = document.clone();
+        let submit = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            event.prevent_default();
+            let Some(input) = document_for_submit.get_element_by_id("region-name") else {
+                return;
+            };
+            let name = input
+                .dyn_into::<HtmlInputElement>()
+                .map(|input| input.value())
+                .unwrap_or_default();
+            let name = name.trim().to_owned();
+            close_region_form(&document_for_submit);
+            if name.is_empty() {
+                return;
+            }
+            let (scale, offset_x, offset_y) = STATE.with(|state| {
+                let state = state.borrow();
+                (state.scale, state.offset_x, state.offset_y)
+            });
+            send_message(&IpcMessage::SaveRegion {
+                name,
+                scale,
+                offset_x,
+                offset_y,
+            });
+        });
+        form.add_event_listener_with_callback("submit", submit.as_ref().unchecked_ref())?;
+        submit.forget();
+    }
+
+    if let Ok(button) = by_id(document, "region-cancel") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            close_region_form(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(input) = by_id(document, "region-name") {
+        let document_for_key = document.clone();
+        let key = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+            if event.key() == "Escape" {
+                close_region_form(&document_for_key);
+                event.prevent_default();
+            }
+        });
+        input.add_event_listener_with_callback("keydown", key.as_ref().unchecked_ref())?;
+        key.forget();
+    }
+
+    Ok(())
+}
+
+fn open_region_form(document: &Document) {
+    if let Some(form) = document.get_element_by_id("region-save-form") {
+        let _ = form.remove_attribute("hidden");
+    }
+    if let Some(input) = document.get_element_by_id("region-name") {
+        if let Ok(input) = input.dyn_into::<HtmlInputElement>() {
+            input.set_value("");
+            let _ = input.focus();
+        }
+    }
+    send_chrome_rects(document);
+}
+
+fn close_region_form(document: &Document) {
+    if let Some(form) = document.get_element_by_id("region-save-form") {
+        let _ = form.set_attribute("hidden", "");
+    }
+    send_chrome_rects(document);
+}
+
+fn render_region_chips(document: &Document) {
+    let (regions, scale, offset_x, offset_y) = STATE.with(|state| {
+        let state = state.borrow();
+        (state.regions.clone(), state.scale, state.offset_x, state.offset_y)
+    });
+    let active = active_region_id(&regions, scale, offset_x, offset_y);
+    let html = regions
+        .iter()
+        .map(|region| {
+            let name = escape_html(&region.name);
+            format!(
+                "<span class=\"region-chip\" data-region-id=\"{id}\" data-active=\"{active}\" title=\"{name} · {zoom}%\">\
+                 <button type=\"button\" class=\"region-chip__go\" data-region-go=\"{id}\">{name}</button>\
+                 <button type=\"button\" class=\"region-chip__del\" data-region-delete=\"{id}\" aria-label=\"Excluir região {name}\">×</button>\
+                 </span>",
+                id = region.id,
+                active = active == Some(region.id),
+                zoom = (region.scale * 100.0).round() as i64,
+            )
+        })
+        .collect::<String>();
+    if let Ok(chips) = by_id(document, "region-chips") {
+        chips.set_inner_html(&html);
+    }
+    send_chrome_rects(document);
+}
+
+fn active_region_id(
+    regions: &[CanvasRegion],
+    scale: f64,
+    offset_x: f64,
+    offset_y: f64,
+) -> Option<u32> {
+    regions
+        .iter()
+        .map(|region| (region.id, region.distance(scale, offset_x, offset_y)))
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .filter(|(_, distance)| *distance < 24.0)
+        .map(|(id, _)| id)
+}
+
+/// Atualiza o destaque da região ativa sem reconstruir os chips.
+fn update_region_active(document: &Document) {
+    let (regions, scale, offset_x, offset_y) = STATE.with(|state| {
+        let state = state.borrow();
+        (state.regions.clone(), state.scale, state.offset_x, state.offset_y)
+    });
+    if regions.is_empty() {
+        return;
+    }
+    let active = active_region_id(&regions, scale, offset_x, offset_y);
+    if let Ok(nodes) = document.query_selector_all("[data-region-id]") {
+        for index in 0..nodes.length() {
+            let Some(node) = nodes.item(index) else {
+                continue;
+            };
+            let Ok(chip) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            let id = chip
+                .get_attribute("data-region-id")
+                .and_then(|value| value.parse::<u32>().ok());
+            let pressed = if id.is_some() && id == active { "true" } else { "false" };
+            let _ = chip.set_attribute("data-active", pressed);
+        }
+    }
+}
+
+fn goto_region(id: u32) {
+    let region = STATE.with(|state| {
+        state
+            .borrow()
+            .regions
+            .iter()
+            .find(|region| region.id == id)
+            .cloned()
+    });
+    let Some(region) = region else {
+        return;
+    };
+    let from = STATE.with(|state| {
+        let state = state.borrow();
+        (state.scale, state.offset_x, state.offset_y)
+    });
+    STATE.with(|state| {
+        state.borrow_mut().anim = Some(TransformAnim {
+            start_ms: js_sys::Date::now(),
+            from,
+            to: (region.scale, region.offset_x, region.offset_y),
+        });
+    });
+}
+
+fn goto_region_by_index(index: usize) {
+    let id = STATE.with(|state| state.borrow().regions.get(index).map(|region| region.id));
+    if let Some(id) = id {
+        goto_region(id);
+        send_message(&IpcMessage::GotoRegion { id });
+    }
+}
+
+fn start_animation_ticker() {
+    let callback = Closure::<dyn FnMut()>::new(|| {
+        let animating = STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let now = js_sys::Date::now();
+            let (start_ms, from, to) = match state.anim.as_ref() {
+                Some(anim) => (anim.start_ms, anim.from, anim.to),
+                None => return false,
+            };
+            let t = ((now - start_ms) / 250.0).clamp(0.0, 1.0);
+            let eased = t * t * (3.0 - 2.0 * t);
+            state.scale = from.0 + (to.0 - from.0) * eased;
+            state.offset_x = from.1 + (to.1 - from.1) * eased;
+            state.offset_y = from.2 + (to.2 - from.2) * eased;
+            if t >= 1.0 {
+                state.anim = None;
+            }
+            true
+        });
+        if !animating {
+            return;
+        }
+        if let Some(window) = web_sys::window() {
+            if let Some(document) = window.document() {
+                let _ = apply_transform(&document);
+                send_transform();
+            }
+        }
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            16,
+        );
+    }
+    callback.forget();
+}
 
 // ---------------------------------------------------------------------------
 // Notificações
