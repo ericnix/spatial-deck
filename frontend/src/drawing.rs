@@ -265,6 +265,9 @@ fn setup_tool_buttons(document: &Document) -> Result<(), JsValue> {
     attach_action(document, "action-redo", |document| redo(document))?;
     attach_action(document, "action-clear", |document| clear_canvas(document))?;
     attach_action(document, "action-grid", |document| toggle_grid(document))?;
+    attach_action(document, "action-layer", |document| {
+        toggle_image_layer(document)
+    })?;
     Ok(())
 }
 
@@ -749,6 +752,7 @@ fn on_pointer_move(document: &Document, event: &PointerEvent) -> Result<(), JsVa
 
     if moved_selection {
         update_overlay(document)?;
+        crate::web::refresh_chrome_rects(document);
     }
     Ok(())
 }
@@ -1125,6 +1129,7 @@ fn commit_history(document: &Document) -> Result<(), JsValue> {
         }
         state.history_index = state.history.len().saturating_sub(1);
     });
+    crate::web::refresh_chrome_rects(document);
     Ok(())
 }
 
@@ -1518,6 +1523,85 @@ fn handle_image_files(document: &Document, input: &HtmlInputElement) -> Result<(
     Ok(())
 }
 
+/// Alterna as imagens selecionadas entre "abaixo" e "acima" das janelas.
+pub fn toggle_image_layer(document: &Document) -> Result<(), JsValue> {
+    let selected = STATE.with(|state| state.borrow().selected.clone());
+    let mut result: Option<String> = None;
+    for id in &selected {
+        let Some(shape) = find_shape(document, id)? else {
+            continue;
+        };
+        if shape.get_attribute("data-kind").as_deref() != Some("image") {
+            continue;
+        }
+        let current = shape
+            .get_attribute("data-layer")
+            .unwrap_or_else(|| "below".to_owned());
+        let next = if current == "above" { "below" } else { "above" };
+        shape.set_attribute("data-layer", next)?;
+        result = Some(next.to_owned());
+    }
+
+    match result {
+        Some(layer) => {
+            show_toast(
+                document,
+                if layer == "above" {
+                    "Imagem acima das janelas."
+                } else {
+                    "Imagem abaixo das janelas."
+                },
+            );
+            crate::web::refresh_chrome_rects(document);
+        }
+        None => show_toast(document, "Selecione uma imagem para mudar de camada."),
+    }
+    Ok(())
+}
+
+/// Retângulos de tela das imagens na camada "acima". O compositor usa esses
+/// recortes para redesenhá-las sobre as janelas reais.
+pub fn above_image_rects(document: &Document) -> Vec<(f64, f64, f64, f64)> {
+    let (scale, offset_x, offset_y) = STATE.with(|state| {
+        let view = &state.borrow().view;
+        (view.scale, view.offset_x, view.offset_y)
+    });
+    let mut rects = Vec::new();
+    let Ok(nodes) = document.query_selector_all("image[data-layer='above']") else {
+        return rects;
+    };
+    for index in 0..nodes.length() {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        let number = |name: &str, fallback: f64| {
+            element
+                .get_attribute(name)
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(fallback)
+        };
+        // O arrasto guarda o deslocamento em data-tx/ty (aplicado via
+        // transform="translate(...)"), então o retângulo visual soma os dois.
+        let x = number("x", 0.0) + number("data-tx", 0.0);
+        let y = number("y", 0.0) + number("data-ty", 0.0);
+        let w = number("width", IMAGE_W);
+        let h = number("height", IMAGE_H);
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        rects.push((
+            x * scale + offset_x,
+            y * scale + offset_y,
+            w * scale,
+            h * scale,
+        ));
+    }
+    rects
+}
+
 /// Carrega a imagem, reduz se necessário e insere no canvas. Imagens pequenas
 /// entram como vieram (preserva transparência); fotos grandes viram JPEG.
 fn fit_image(document: &Document, data_url: String, world_x: f64, world_y: f64) {
@@ -1638,6 +1722,7 @@ fn insert_image(
     let element = create_shape(document, "image")?;
     element.set_attribute("data-kind", "image")?;
     element.set_attribute("data-image-id", &image_id)?;
+    element.set_attribute("data-layer", "below")?;
     element.set_attribute("x", &fmt(world_x - IMAGE_W / 2.0))?;
     element.set_attribute("y", &fmt(world_y - IMAGE_H / 2.0))?;
     element.set_attribute("width", &fmt(IMAGE_W))?;

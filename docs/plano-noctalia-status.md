@@ -262,6 +262,24 @@ verificada no WebKit com uma imagem sintética 3000×2000 (data URL válido de
 572 KB, dentro do teto). O seletor em si depende de clique do usuário para
 abrir (WebKit exige gesto), então a validação visual do diálogo ficou manual.
 
+## Ajuste — janela redimensionável e camadas — CONCLUÍDO
+
+- Janela aninhada redimensionável (mínimo 720×480). O compositor reconfigura
+  a saída no resize; shell, deck e canvas acompanham. Validado alternando
+  fullscreen 1920×1080 ↔ janela 1280×720 (log "saída redimensionada").
+- Pilha explícita de janelas (fundo→topo). `raise_window`/`lower_window` por
+  IPC, botões ▴/▾ na barra de cada cartão; foco também sobe a janela. Z
+  bases: comuns 10.., maximizado 210, diálogo 220, shell 0.
+- Imagens com camada `above`/`below` (padrão below). Botão de camadas no deck
+  alterna as imagens selecionadas; imagens "acima" entram em `ChromeRects`
+  (um retângulo por imagem, somando `data-tx/ty` do arrasto) e são
+  redesenhadas sobre as janelas, com HUD/deck ainda por cima. Atualização
+  durante pan/zoom limitada a ~8 Hz.
+- Histórico, desfazer/refazer e compressão de imagens continuam valendo.
+
+Limitação: o recorte da imagem "acima" vem da superfície do shell, então
+transparência mostra o canvas (não a janela atrás).
+
 ## Próxima etapa
 
 Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.

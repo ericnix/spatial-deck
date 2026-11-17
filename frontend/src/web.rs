@@ -255,6 +255,7 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
     static SOCKET: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
     static TOAST_GENERATION: Cell<u32> = const { Cell::new(0) };
+    static LAST_CHROME: Cell<f64> = const { Cell::new(0.0) };
 }
 
 #[wasm_bindgen]
@@ -1120,6 +1121,33 @@ fn bind_card(document: &Document, card_id: u32) -> Result<(), JsValue> {
         pointer.forget();
     }
 
+    // Botões de camada (trazer para frente / enviar para trás).
+    if let Ok(buttons) = element.query_selector_all("[data-window-z]") {
+        for index in 0..buttons.length() {
+            let Some(node) = buttons.item(index) else {
+                continue;
+            };
+            let Ok(button) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            let direction = button
+                .get_attribute("data-window-z")
+                .unwrap_or_default();
+            let pointer = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+                event.stop_propagation();
+                event.prevent_default();
+                match direction.as_str() {
+                    "raise" => send_message(&IpcMessage::RaiseWindow { window_id: card_id }),
+                    "lower" => send_message(&IpcMessage::LowerWindow { window_id: card_id }),
+                    _ => {}
+                }
+            });
+            button
+                .add_event_listener_with_callback("pointerdown", pointer.as_ref().unchecked_ref())?;
+            pointer.forget();
+        }
+    }
+
     Ok(())
 }
 
@@ -1138,6 +1166,8 @@ fn ensure_card(document: &Document, id: u32, title: &str) {
         element.set_inner_html(&format!(
             "<div class=\"window-card__bar\"><span class=\"dots\"><i></i><i></i><i></i></span>\
              <b>{}</b><span class=\"window-card__id\">{id}</span>\
+             <button class=\"window-card__z\" data-window-z=\"lower\" type=\"button\" aria-label=\"Enviar para trás\" title=\"Enviar para trás\">▾</button>\
+             <button class=\"window-card__z\" data-window-z=\"raise\" type=\"button\" aria-label=\"Trazer para frente\" title=\"Trazer para frente\">▴</button>\
              <button class=\"window-card__close\" type=\"button\" aria-label=\"Fechar janela\">×</button>\
              </div><div class=\"window-card__body\"></div>",
             escape_html(title)
@@ -1332,8 +1362,31 @@ fn apply_transform(document: &Document) -> Result<(), JsValue> {
     update_zoom_label(document, scale);
     update_glow(document)?;
     update_region_active(document);
+    maybe_refresh_chrome_rects(document);
     maybe_auto_maximize();
     Ok(())
+}
+
+/// Envia `ChromeRects` no máximo a cada 120 ms durante pan/zoom. As imagens
+/// marcadas como "acima" precisam que o compositor redesenhe o recorte delas
+/// por cima das janelas a cada quadro do movimento.
+fn maybe_refresh_chrome_rects(document: &Document) {
+    let now = js_sys::Date::now();
+    let due = LAST_CHROME.with(|cell| {
+        if now - cell.get() >= 120.0 {
+            cell.set(now);
+            true
+        } else {
+            false
+        }
+    });
+    if due {
+        send_chrome_rects(document);
+    }
+}
+
+pub(crate) fn refresh_chrome_rects(document: &Document) {
+    send_chrome_rects(document);
 }
 
 fn update_zoom_label(document: &Document, scale: f64) {
@@ -1543,7 +1596,12 @@ fn remove_card(window_id: u32) {
 /// Envia ao compositor as áreas do chrome (HUD, deck e gaveta aberta) para que
 /// elas fiquem acima das janelas reais e recebam os cliques.
 fn send_chrome_rects(document: &Document) {
-    let mut rects = Vec::new();
+    // Imagens na camada "acima" são redesenhadas pelo compositor por cima
+    // das janelas. Vêm primeiro para o HUD/deck continuarem acima delas.
+    let mut rects: Vec<ChromeRect> = drawing::above_image_rects(document)
+        .into_iter()
+        .map(|(x, y, w, h)| ChromeRect { x, y, w, h })
+        .collect();
     for id in [
         "hud",
         "deck-shell",

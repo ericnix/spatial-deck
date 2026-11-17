@@ -56,8 +56,9 @@ Variáveis úteis:
 | `SPATIAL_DECK_SOFTWARE` | desligado | `1` desativa a aceleração de hardware do WebKit no shell (fallback para drivers GL problemáticos). |
 | `RUST_LOG` | `info` | Nível de log do compositor (log em `/tmp/spatial-deck.log`). |
 
-O compositor abre uma janela aninhada `Spatial Deck` na sessão gráfica atual e
-expõe:
+O compositor abre uma janela aninhada `Spatial Deck` na sessão gráfica atual
+(redimensionável, mínimo 720×480; ao mudar o tamanho, a saída, o shell e o
+canvas se ajustam) e expõe:
 
 | Endpoint | Uso |
 | --- | --- |
@@ -333,6 +334,21 @@ serem restauradas.
 Pedidos de maximizar vindos do cliente são ignorados e o atalho de maximizar
 apenas restaura: maximização própria ainda não faz parte do desktop (a barra de
 título sairia da tela).
+
+### Camadas de janelas e imagens
+
+A pilha do canvas é explícita (fundo → topo). Cada cartão tem **▴** e **▾** na
+barra de título para trazer a janela para frente ou enviá-la para trás
+(`raise_window` / `lower_window`); clicar numa janela também a sobe. Foco,
+maximizado e diálogos têm faixas de Z próprias.
+
+Imagens podem ficar **abaixo** (padrão) ou **acima** das janelas. Com uma
+imagem selecionada, o botão de camadas do deck alterna entre as duas. Imagens
+"acima" entram em `ChromeRects` (um retângulo por imagem, atualizado durante
+pan/zoom) e o compositor redesenha aquele recorte do shell por cima das
+janelas reais — o HUD e o deck continuam acima delas. Como o recorte é da
+superfície do shell, áreas transparentes da imagem mostram o canvas, não a
+janela atrás.
 
 ### XWayland
 

@@ -286,6 +286,28 @@ html.panning * {
 
 .window-card__id { margin-left: auto; }
 
+.window-card__z {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.window-card__z:hover {
+  color: var(--ink);
+  background: var(--chip-bg-hover);
+}
+
 .window-card__close {
   display: inline-flex;
   align-items: center;

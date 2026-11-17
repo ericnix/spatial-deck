@@ -150,8 +150,8 @@ const TEMP_ID_BASE: u32 = 1_000_000;
 /// Camadas de empilhamento (`Space` ordena do menor para o maior).
 const Z_SHELL: u8 = 0;
 const Z_WINDOW: u8 = 10;
-const Z_MAXIMIZED: u8 = 20;
-const Z_DIALOG: u8 = 30;
+const Z_MAXIMIZED: u8 = 210;
+const Z_DIALOG: u8 = 220;
 /// `app_id` do cliente GTK/WebKit que hospeda a interface do desktop.
 const SHELL_APP_ID: &str = "spatial-deck-shell";
 
@@ -483,6 +483,8 @@ struct App {
     focused_window: Option<u32>,
     /// Ordem de foco, da mais antiga para a mais recente (Alt+Tab).
     focus_order: Vec<u32>,
+    /// Pilha do canvas, do fundo para o topo (ids de janelas comuns).
+    stack: Vec<u32>,
     move_state: Option<MoveState>,
     resize_state: Option<ResizeState>,
     /// Coalescência de ClusterUpdate durante arrastos para não atrasar o shell.
@@ -591,6 +593,7 @@ impl App {
             next_temp_id: TEMP_ID_BASE,
             focused_window: None,
             focus_order: Vec::new(),
+            stack: Vec::new(),
             move_state: None,
             resize_state: None,
             last_cluster_at: None,
@@ -1095,6 +1098,7 @@ impl App {
             }
         }
 
+        self.apply_stack_z();
         self.refresh_overview();
         self.apply_layout();
         // O shell precisa conhecer posição e tamanho para vestir o cartão
@@ -1140,7 +1144,66 @@ impl App {
         self.focused_window = Some(window_id);
         self.focus_order.retain(|id| *id != window_id);
         self.focus_order.push(window_id);
-        self.space.raise_element(&window, true);
+        self.raise_window(window_id);
+    }
+
+    /// Traz a janela para o topo da pilha do canvas.
+    fn raise_window(&mut self, window_id: u32) {
+        if !self.windows.iter().any(|window| window.id == window_id) {
+            return;
+        }
+        self.stack.retain(|id| *id != window_id);
+        self.stack.push(window_id);
+        self.apply_stack_z();
+    }
+
+    /// Envia a janela para o fundo da pilha do canvas.
+    fn lower_window(&mut self, window_id: u32) {
+        if !self.windows.iter().any(|window| window.id == window_id) {
+            return;
+        }
+        self.stack.retain(|id| *id != window_id);
+        self.stack.insert(0, window_id);
+        self.apply_stack_z();
+    }
+
+    /// Reaplica os índices Z a partir da pilha: janelas comuns ocupam
+    /// `Z_WINDOW..`, maximizadas ficam em `Z_MAXIMIZED` e diálogos em
+    /// `Z_DIALOG`. É a única fonte de ordem entre janelas.
+    fn apply_stack_z(&mut self) {
+        let mut stack = std::mem::take(&mut self.stack);
+        stack.retain(|id| {
+            self.windows
+                .iter()
+                .any(|window| window.id == *id && !window.pending_id)
+        });
+        for managed in &self.windows {
+            if !managed.pending_id && !managed.dialog && !stack.contains(&managed.id) {
+                stack.push(managed.id);
+            }
+        }
+
+        let mut normal: u8 = 0;
+        for id in &stack {
+            let Some(managed) = self.windows.iter().find(|window| window.id == *id) else {
+                continue;
+            };
+            if managed.maximized || managed.fullscreen {
+                managed.window.override_z_index(Z_MAXIMIZED);
+            } else {
+                managed
+                    .window
+                    .override_z_index(Z_WINDOW.saturating_add(normal.min(180)));
+                normal = normal.saturating_add(1);
+            }
+        }
+        for managed in &self.windows {
+            if managed.dialog {
+                managed.window.override_z_index(Z_DIALOG);
+            }
+        }
+        debug!(?stack, "pilha do canvas");
+        self.stack = stack;
         self.space.refresh();
     }
 
@@ -1767,6 +1830,12 @@ impl App {
             IpcMessage::CloseWindow { window_id } => {
                 self.close_window(window_id);
             }
+            IpcMessage::RaiseWindow { window_id } => {
+                self.raise_window(window_id);
+            }
+            IpcMessage::LowerWindow { window_id } => {
+                self.lower_window(window_id);
+            }
             IpcMessage::WindowClosed { .. } => {
                 // Mensagem enviada pelo compositor; ignorada se ecoada.
             }
@@ -1973,7 +2042,7 @@ impl App {
         };
 
         window.override_z_index(z_index);
-        self.space.raise_element(&window, true);
+        self.raise_window(window_id);
         self.apply_layout();
     }
 
@@ -2030,7 +2099,7 @@ impl App {
         };
 
         window.override_z_index(z_index);
-        self.space.raise_element(&window, true);
+        self.raise_window(window_id);
         self.apply_layout();
     }
 
@@ -2072,6 +2141,7 @@ impl App {
         });
         self.register_foreign_toplevel(id, &window);
 
+        self.raise_window(id);
         self.focus_window(id);
         self.refresh_overview();
         self.apply_layout();
@@ -2090,6 +2160,7 @@ impl App {
         let managed = self.windows.remove(index);
         self.space.unmap_elem(&managed.window);
         self.unregister_foreign_toplevel(managed.id);
+        self.stack.retain(|id| *id != managed.id);
         self.focus_order.retain(|id| *id != managed.id);
         if self.focused_window == Some(managed.id) {
             self.focused_window = None;
@@ -2114,6 +2185,7 @@ impl App {
         if size == self.output_physical_size || size.w <= 0 || size.h <= 0 {
             return;
         }
+        info!(w = size.w, h = size.h, "saída redimensionada");
         self.output_physical_size = size;
         self.output_logical_size = Size::from((size.w, size.h));
         self.output.change_current_state(
@@ -2937,6 +3009,7 @@ impl XdgShellHandler for App {
             let managed = self.windows.remove(index);
             self.space.unmap_elem(&managed.window);
             self.unregister_foreign_toplevel(managed.id);
+            self.stack.retain(|id| *id != managed.id);
             self.focus_order.retain(|id| *id != managed.id);
 
             // Diálogos órfãos deixam de ser transientes.
@@ -3123,6 +3196,7 @@ fn run_compositor(
 
     let attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(1280.0, 720.0))
+        .with_min_inner_size(LogicalSize::new(720.0, 480.0))
         .with_title("Spatial Deck");
     let (mut backend, mut winit) = winit::init_from_attributes::<GlesRenderer>(attributes)
         .map_err(|error| anyhow::anyhow!("falha ao abrir backend winit: {error:?}"))?;

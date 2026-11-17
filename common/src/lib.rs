@@ -65,6 +65,12 @@ pub enum IpcMessage {
     /// Fecha a janela interna correspondente ao id numérico.
     CloseWindow { window_id: u32 },
 
+    /// Traz a janela para o topo da pilha do canvas.
+    RaiseWindow { window_id: u32 },
+
+    /// Envia a janela para o fundo da pilha do canvas.
+    LowerWindow { window_id: u32 },
+
     /// Notifica o frontend de que a janela interna foi fechada/destruída.
     WindowClosed { window_id: u32 },
 
@@ -503,6 +509,16 @@ mod tests {
         let json = closed.to_json().unwrap();
         assert!(json.contains("\"type\":\"window_closed\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), closed);
+
+        let raise = IpcMessage::RaiseWindow { window_id: 3 };
+        let json = raise.to_json().unwrap();
+        assert!(json.contains("\"type\":\"raise_window\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), raise);
+
+        let lower = IpcMessage::LowerWindow { window_id: 3 };
+        let json = lower.to_json().unwrap();
+        assert!(json.contains("\"type\":\"lower_window\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), lower);
     }
 
     #[test]
