@@ -183,10 +183,12 @@ html[data-canvas-theme="minimalist"] #deck {
   filter: none;
 }
 
+/* A gaveta é só conteúdo: fundo/borda retangulares esconderiam o trapézio
+   recortado do deck quando ela cresce. O painel clippado já pinta o fundo. */
 html[data-canvas-theme="minimalist"] #app-drawer {
-  border: 1px solid #000000;
+  border: 0;
   border-radius: 0;
-  background: rgba(255, 255, 255, .96);
+  background: transparent;
   box-shadow: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
