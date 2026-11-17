@@ -240,11 +240,18 @@ mundo.
 | Elipse | `O` | elipse com prévia durante o arrasto. |
 | Texto | `T` | clique no canvas, digite no editor flutuante; `Enter` confirma, `Esc` cancela. |
 | Borracha | `E` | clique numa forma ou imagem para removê-la. |
-| Imagem | `I` | clique num ponto livre do canvas e escolha um arquivo; a imagem entra como `<image>` SVG com data URL. |
+| Imagem | `I` | clique num ponto livre do canvas e escolha um arquivo; a imagem entra como `<image>` SVG. Arquivos acima de 600 KB são redimensionados (maior lado 1600 px) e recomprimidos em JPEG antes de entrar no DOM; acima de 40 MB são recusados. |
 
 O deck também tem cor do traço, espessura (`1`–`24`), desfazer (`Ctrl+Z`),
 refazer (`Ctrl+Shift+Z`), alternar a grade (`G`) e limpar o canvas. O histórico
-guarda snapshots do SVG e é limitado para não crescer sem controle.
+guarda snapshots do SVG e é limitado (60) para não crescer sem controle. Os
+data URLs das imagens **não** entram nos snapshots: cada `<image>` guarda um
+`data-image-id` e o base64 fica num mapa em memória, reidratado no
+desfazer/refazer.
+
+O seletor de arquivos do WebKit roda dentro do deck (`GTK_USE_PORTAL=0` no
+`run-rust.sh`) e o compositor trata janelas do processo do shell que não são a
+principal como diálogos (foco próprio, `Z_DIALOG`, sem tamanho forçado).
 
 ### Gestos do mouse
 

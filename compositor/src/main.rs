@@ -2622,7 +2622,17 @@ impl XdgShellHandler for App {
         let parent_id = parent_surface
             .as_ref()
             .and_then(|parent| self.window_id_for_wl_surface(parent));
-        let dialog = parent_id.is_some();
+        // Diálogos do próprio shell (seletor de arquivos do WebKit, por
+        // exemplo) têm a janela do shell como pai transitório. Tratá-los como
+        // diálogo evita que virem um cartão comum e ficarem atrás do deck.
+        let parent_is_shell = parent_surface.as_ref().is_some_and(|parent| {
+            self.shell_window
+                .as_ref()
+                .and_then(|shell| shell.window.wl_surface())
+                .as_deref()
+                == Some(parent)
+        });
+        let dialog = parent_id.is_some() || parent_is_shell;
 
         // O `parent` xdg só é conhecido depois de `get_toplevel`, então o id
         // definitivo (cartão 1..4 ou diálogo 1000+) é atribuído no primeiro
@@ -2670,7 +2680,10 @@ impl XdgShellHandler for App {
             allow_oversize: false,
         });
 
-        if !is_shell_surface(&surface) {
+        // Só a primeira janela do shell é adotada; diálogos posteriores do
+        // mesmo processo precisam de foco próprio para serem utilizáveis.
+        let shell_surface = self.shell_window.is_none() && is_shell_surface(&surface);
+        if !shell_surface {
             self.focus_window(id);
         } else {
             let keyboard = self.keyboard.clone();
@@ -2688,13 +2701,13 @@ impl XdgShellHandler for App {
             "nova janela xdg_toplevel"
         );
 
-        if is_shell_surface(&surface) {
+        if self.shell_window.is_none() && is_shell_surface(&surface) {
             self.adopt_shell(&surface);
         }
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
-        if is_shell_surface(&surface) {
+        if self.shell_window.is_none() && is_shell_surface(&surface) {
             self.adopt_shell(&surface);
             return;
         }
@@ -2711,7 +2724,7 @@ impl XdgShellHandler for App {
     }
 
     fn title_changed(&mut self, surface: ToplevelSurface) {
-        if is_shell_surface(&surface) {
+        if self.shell_window.is_none() && is_shell_surface(&surface) {
             self.adopt_shell(&surface);
             return;
         }

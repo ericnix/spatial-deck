@@ -71,6 +71,7 @@ fi
 echo "[run-rust] shell (log: $SHELL_LOG)"
 WAYLAND_DISPLAY=spatial-deck \
 GDK_BACKEND=wayland \
+GTK_USE_PORTAL=0 \
 	./target/spatial-deck-shell "$URL" >"$SHELL_LOG" 2>&1 &
 SHELL_PID=$!
 

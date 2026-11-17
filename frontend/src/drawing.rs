@@ -12,8 +12,9 @@ use std::cell::RefCell;
 
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use web_sys::{
-    Blob, Document, DomRect, Element, Event, FileReader, HtmlInputElement, HtmlTextAreaElement,
-    KeyboardEvent, MouseEvent, PointerEvent,
+    Blob, CanvasRenderingContext2d, Document, DomRect, Element, Event, FileReader, HtmlCanvasElement,
+    HtmlImageElement, HtmlInputElement, HtmlTextAreaElement, KeyboardEvent, MouseEvent,
+    PointerEvent,
 };
 
 use crate::web::show_toast;
@@ -24,6 +25,14 @@ const DEFAULT_SIZE: f64 = 3.0;
 const MAX_HISTORY: usize = 60;
 const IMAGE_W: f64 = 480.0;
 const IMAGE_H: f64 = 360.0;
+/// Maior lado aceito depois da recompressão (px).
+const IMAGE_MAX_DIM: f64 = 1600.0;
+/// Imagens nativas abaixo disso entram sem recompressão (preserva alfa).
+const IMAGE_RAW_LIMIT: usize = 600_000;
+/// Teto do data URL recompressado; acima disso tenta de novo menor.
+const IMAGE_MAX_BYTES: usize = 1_600_000;
+/// Arquivos maiores que isso são recusados antes da leitura.
+const IMAGE_FILE_LIMIT: f64 = 40_000_000.0;
 const DEFAULT_FONT: &str =
     "ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Roboto, Arial, sans-serif";
 const LINE_RATIO: f64 = 1.25;
@@ -132,6 +141,10 @@ struct DrawingState {
     text_editor: Option<TextEditor>,
     pending_image_point: Option<(f64, f64)>,
     grid_visible: bool,
+    /// Data URL de cada imagem, por id. O histórico guarda só o id, não o
+    /// base64 — senão cada snapshot duplicaria todos os bytes.
+    images: std::collections::HashMap<String, String>,
+    next_image_id: u64,
 }
 
 impl Default for DrawingState {
@@ -149,6 +162,8 @@ impl Default for DrawingState {
             text_editor: None,
             pending_image_point: None,
             grid_visible: true,
+            images: std::collections::HashMap::new(),
+            next_image_id: 1,
         }
     }
 }
@@ -1045,8 +1060,7 @@ fn undo(document: &Document) -> Result<(), JsValue> {
     });
 
     if let Some(html) = html {
-        draw_world(document)?.set_inner_html(&html);
-        clear_selection(document)?;
+        apply_history_html(document, &html)?;
         show_toast(document, "Desfeito.");
     } else {
         show_toast(document, "Nada para desfazer.");
@@ -1066,8 +1080,7 @@ fn redo(document: &Document) -> Result<(), JsValue> {
     });
 
     if let Some(html) = html {
-        draw_world(document)?.set_inner_html(&html);
-        clear_selection(document)?;
+        apply_history_html(document, &html)?;
         show_toast(document, "Refeito.");
     } else {
         show_toast(document, "Nada para refazer.");
@@ -1096,7 +1109,7 @@ fn clear_canvas(document: &Document) -> Result<(), JsValue> {
 }
 
 fn commit_history(document: &Document) -> Result<(), JsValue> {
-    let html = draw_world(document)?.inner_html();
+    let html = serialize_world(document)?;
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         if state.history.get(state.history_index) == Some(&html) {
@@ -1112,6 +1125,59 @@ fn commit_history(document: &Document) -> Result<(), JsValue> {
         }
         state.history_index = state.history.len().saturating_sub(1);
     });
+    Ok(())
+}
+
+/// Serializa o mundo sem os data URLs das imagens: o snapshot guarda apenas
+/// `data-image-id` e o base64 continua em `STATE.images`. Sem isso, cada ação
+/// duplicaria todos os bytes de cada imagem no histórico (60 snapshots).
+fn serialize_world(document: &Document) -> Result<String, JsValue> {
+    let world = draw_world(document)?;
+    let nodes = world.query_selector_all("image[data-image-id]")?;
+    let mut saved: Vec<(Element, Option<String>)> = Vec::new();
+    for index in 0..nodes.length() {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        let href = element.get_attribute("href");
+        let _ = element.set_attribute("href", "");
+        saved.push((element, href));
+    }
+
+    let html = world.inner_html();
+    for (element, href) in saved {
+        if let Some(href) = href {
+            let _ = element.set_attribute("href", &href);
+        }
+    }
+    Ok(html)
+}
+
+/// Restaura um snapshot e devolve os `href` das imagens a partir do mapa.
+fn apply_history_html(document: &Document, html: &str) -> Result<(), JsValue> {
+    let world = draw_world(document)?;
+    world.set_inner_html(html);
+
+    let nodes = world.query_selector_all("image[data-image-id]")?;
+    for index in 0..nodes.length() {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        let Some(id) = element.get_attribute("data-image-id") else {
+            continue;
+        };
+        let data = STATE.with(|state| state.borrow().images.get(&id).cloned());
+        if let Some(data) = data {
+            let _ = element.set_attribute("href", &data);
+        }
+    }
+    clear_selection(document)?;
     Ok(())
 }
 
@@ -1419,6 +1485,13 @@ fn handle_image_files(document: &Document, input: &HtmlInputElement) -> Result<(
         if !kind.is_empty() && !kind.starts_with("image/") {
             continue;
         }
+        if file.size() > IMAGE_FILE_LIMIT {
+            show_toast(
+                document,
+                "Imagem muito grande (acima de 40 MB); escolha um arquivo menor.",
+            );
+            continue;
+        }
 
         let reader = FileReader::new()?;
         let reader_for_load = reader.clone();
@@ -1428,7 +1501,9 @@ fn handle_image_files(document: &Document, input: &HtmlInputElement) -> Result<(
         let onload = Closure::<dyn FnMut()>::new(move || {
             if let Ok(result) = reader_for_load.result() {
                 if let Some(data_url) = result.as_string() {
-                    let _ = insert_image(&document, &data_url, world_x, world_y);
+                    // Decodifica e reduz antes de entrar no DOM: uma foto de
+                    // 12 MP vira ~300 KB em vez de ~10 MB de base64.
+                    fit_image(&document, data_url, world_x, world_y);
                 }
             }
         });
@@ -1443,14 +1518,126 @@ fn handle_image_files(document: &Document, input: &HtmlInputElement) -> Result<(
     Ok(())
 }
 
+/// Carrega a imagem, reduz se necessário e insere no canvas. Imagens pequenas
+/// entram como vieram (preserva transparência); fotos grandes viram JPEG.
+fn fit_image(document: &Document, data_url: String, world_x: f64, world_y: f64) {
+    let Ok(image) = HtmlImageElement::new() else {
+        show_toast(document, "Não foi possível preparar a imagem.");
+        return;
+    };
+
+    let document_for_load = document.clone();
+    let image_for_load = image.clone();
+    let data_for_load = data_url.clone();
+    let onload = Closure::<dyn FnMut()>::new(move || {
+        let width = image_for_load.natural_width() as f64;
+        let height = image_for_load.natural_height() as f64;
+        // Só o tamanho do base64 importa: dimensões grandes com arquivo
+        // pequeno (PNG chapado) não justificam recomprimir para JPEG.
+        let small = data_for_load.len() <= IMAGE_RAW_LIMIT;
+        let data = if small {
+            Some(data_for_load.clone())
+        } else {
+            compress_image(&document_for_load, &image_for_load, width, height)
+        };
+        match data {
+            Some(data) => {
+                let _ = insert_image(&document_for_load, &data, world_x, world_y);
+            }
+            None => {
+                show_toast(
+                    &document_for_load,
+                    "Não foi possível reduzir a imagem; tente outro arquivo.",
+                );
+            }
+        }
+    });
+    image.set_onload(Some(onload.as_ref().unchecked_ref()));
+    onload.forget();
+
+    let document_for_error = document.clone();
+    let onerror = Closure::<dyn FnMut()>::new(move || {
+        show_toast(&document_for_error, "Formato de imagem não suportado.");
+    });
+    image.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+    onerror.forget();
+
+    image.set_src(&data_url);
+}
+
+/// Desenha a imagem num canvas com o maior lado em 1600 px e exporta JPEG.
+/// Se ainda passar do teto, reduz mais e baixa a qualidade.
+fn compress_image(
+    document: &Document,
+    image: &HtmlImageElement,
+    width: f64,
+    height: f64,
+) -> Option<String> {
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let scale = (IMAGE_MAX_DIM / width.max(height)).min(1.0);
+    let mut target_w = (width * scale).round().max(1.0);
+    let mut target_h = (height * scale).round().max(1.0);
+    let canvas = document
+        .create_element("canvas")
+        .ok()?
+        .dyn_into::<HtmlCanvasElement>()
+        .ok()?;
+    let mut quality = 0.85;
+
+    for attempt in 0..3 {
+        canvas.set_width(target_w.max(1.0) as u32);
+        canvas.set_height(target_h.max(1.0) as u32);
+        let context = canvas
+            .get_context("2d")
+            .ok()??
+            .dyn_into::<CanvasRenderingContext2d>()
+            .ok()?;
+        // JPEG não tem alfa: fundo branco evita áreas pretas.
+        context.set_fill_style_str("#ffffff");
+        context.fill_rect(0.0, 0.0, target_w, target_h);
+        context
+            .draw_image_with_html_image_element_and_dw_and_dh(
+                image, 0.0, 0.0, target_w, target_h,
+            )
+            .ok()?;
+        let options = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &options,
+            &JsValue::from_str("quality"),
+            &JsValue::from_f64(quality),
+        );
+        let data = canvas
+            .to_data_url_with_type_and_encoder_options("image/jpeg", &options)
+            .ok()?;
+        if data.len() <= IMAGE_MAX_BYTES || attempt == 2 {
+            return Some(data);
+        }
+        target_w *= 0.75;
+        target_h *= 0.75;
+        quality -= 0.12;
+    }
+    None
+}
+
 fn insert_image(
     document: &Document,
     data_url: &str,
     world_x: f64,
     world_y: f64,
 ) -> Result<(), JsValue> {
+    let image_id = STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let id = state.next_image_id;
+        state.next_image_id += 1;
+        state.images.insert(id.to_string(), data_url.to_owned());
+        id.to_string()
+    });
+
     let element = create_shape(document, "image")?;
     element.set_attribute("data-kind", "image")?;
+    element.set_attribute("data-image-id", &image_id)?;
     element.set_attribute("x", &fmt(world_x - IMAGE_W / 2.0))?;
     element.set_attribute("y", &fmt(world_y - IMAGE_H / 2.0))?;
     element.set_attribute("width", &fmt(IMAGE_W))?;

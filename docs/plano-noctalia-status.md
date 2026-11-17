@@ -234,6 +234,34 @@ Entregue no compositor Rust (Smithay 0.7):
 - `ItemIsMenu` abre o menu no clique esquerdo; não há tooltip próprio
   (`ToolTip` do SNI ignorado).
 
+## Correção — travamento ao abrir imagem — CONCLUÍDA
+
+Sintoma: o desktop travava ao escolher uma imagem na ferramenta `I`.
+
+Causas prováveis atacadas:
+
+1. **Memória/histórico**: cada `<image>` carregava o data URL completo e cada
+   um dos 60 snapshots do histórico serializava o SVG inteiro, duplicando
+   todos os base64. Uma foto de 10 MB virava ~13 MB × 60.
+   - Agora imagens acima de 600 KB são redimensionadas (maior lado 1600 px) e
+     recomprimidas em JPEG (qualidade 0.85, caindo até caber em 1,6 MB);
+     arquivos acima de 40 MB e formatos inválidos são recusados com aviso.
+   - O histórico guarda só `data-image-id`; o base64 fica em `STATE.images` e
+     é reidratado no desfazer/refazer.
+2. **Portal do host**: o seletor podia abrir no portal do KDE, atrás da janela
+   do deck (always-on-top) e bloquear a página. `run-rust.sh` agora exporta
+   `GTK_USE_PORTAL=0`, forçando o diálogo GTK dentro do deck.
+3. **Diálogo confundido com o shell**: qualquer janela do processo do shell
+   era tratada como "janela do shell" (`is_shell_surface` por `app_id`), então
+   o seletor ficava sem foco próprio. Agora só a primeira janela é adotada;
+   janelas seguintes com a janela do shell como pai viram diálogo
+   (`Z_DIALOG`, sem `pending.size` forçado, foco de teclado).
+
+Validação: `cargo test --workspace` verde (22 + 20 + 20); compressão
+verificada no WebKit com uma imagem sintética 3000×2000 (data URL válido de
+572 KB, dentro do teto). O seletor em si depende de clique do usuário para
+abrir (WebKit exige gesto), então a validação visual do diálogo ficou manual.
+
 ## Próxima etapa
 
 Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.
