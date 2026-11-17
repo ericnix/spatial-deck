@@ -15,6 +15,8 @@ pub const HISTORY_LIMIT: usize = 100;
 struct Active {
     item: NotificationItem,
     deadline: Option<Instant>,
+    /// Tempo restante congelado enquanto o ponteiro está sobre o popup.
+    hold_remaining: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -105,6 +107,7 @@ impl Store {
         self.active.push(Active {
             item: item.clone(),
             deadline,
+            hold_remaining: None,
         });
 
         self.history.retain(|entry| entry.id != id);
@@ -119,6 +122,20 @@ impl Store {
         let before = self.active.len();
         self.active.retain(|entry| entry.item.id != id);
         before != self.active.len()
+    }
+
+    /// Congela/retoma o prazo de uma notificação (hover no popup).
+    pub fn hold(&mut self, id: u32, held: bool) {
+        let Some(entry) = self.active.iter_mut().find(|entry| entry.item.id == id) else {
+            return;
+        };
+        if held {
+            if let Some(deadline) = entry.deadline.take() {
+                entry.hold_remaining = Some(deadline.saturating_duration_since(Instant::now()));
+            }
+        } else if let Some(remaining) = entry.hold_remaining.take() {
+            entry.deadline = Some(Instant::now() + remaining);
+        }
     }
 
     /// Ids cujo prazo venceu; remove-os das ativas.
@@ -238,6 +255,17 @@ mod tests {
         assert_eq!(store.expire_due(now - std::time::Duration::from_millis(1)), Vec::<u32>::new());
         assert_eq!(store.expire_due(now), vec![id]);
         assert_eq!(store.active_len(), 0);
+    }
+
+    #[test]
+    fn hold_pauses_and_resumes_expiry() {
+        let mut store = Store::in_memory();
+        let now = Instant::now();
+        let id = store.push(item("a"), 0, Some(now));
+        store.hold(id, true);
+        assert_eq!(store.expire_due(now + std::time::Duration::from_secs(5)), Vec::<u32>::new());
+        store.hold(id, false);
+        assert_eq!(store.expire_due(Instant::now() + std::time::Duration::from_secs(1)), vec![id]);
     }
 
     #[test]

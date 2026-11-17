@@ -104,6 +104,9 @@ async fn handle(
         IpcMessage::DndState { active } => {
             store.lock().await.set_dnd(active);
         }
+        IpcMessage::NotificationHold { id, held } => {
+            store.lock().await.hold(id, held);
+        }
         IpcMessage::NotificationAction { id, action } => {
             if let Err(error) = emitter.emit(INTERFACE, "ActionInvoked", &(id, action)).await {
                 warn!(%error, id, "falha ao emitir ActionInvoked");

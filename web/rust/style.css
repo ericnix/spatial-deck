@@ -18,6 +18,7 @@
   --chip-line-hover: rgba(148, 180, 235, .30);
   --card: rgba(13, 20, 32, .86);
   --card-line: rgba(140, 175, 235, .18);
+  --danger: #f87171;
 }
 
 [data-canvas-theme="minimalist"] {
@@ -39,6 +40,7 @@
   --chip-line-hover: #000000;
   --card: #ffffff;
   --card-line: #000000;
+  --danger: #b91c1c;
 }
 
 [data-canvas-theme="minimalist-dark"] {
@@ -60,6 +62,7 @@
   --chip-line-hover: #ffffff;
   --card: #000000;
   --card-line: #ffffff;
+  --danger: #f87171;
 }
 
 [data-canvas-theme="oxidized-iron"] {
@@ -81,6 +84,7 @@
   --chip-line-hover: rgba(198, 140, 92, .32);
   --card: rgba(26, 20, 16, .88);
   --card-line: rgba(198, 140, 92, .20);
+  --danger: #e2703a;
 }
 
 [data-canvas-theme="nord"] {
@@ -102,6 +106,7 @@
   --chip-line-hover: rgba(136, 192, 208, .32);
   --card: rgba(59, 66, 82, .88);
   --card-line: rgba(136, 192, 208, .20);
+  --danger: #bf616a;
 }
 
 * { box-sizing: border-box; }
@@ -1021,8 +1026,228 @@ html.panning * {
 
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
-@media (max-width: 980px) {
+
+/* ------------------------------------------------------- notificações */
+
+#notification-popups {
+  position: fixed;
+  top: 84px;
+  right: 18px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(360px, calc(100vw - 36px));
+  pointer-events: none;
+}
+
+.notification-popup {
+  pointer-events: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--card-line);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .35);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: notification-in .18s ease;
+}
+
+.notification-popup[data-urgency="2"] { border-left-color: var(--danger); }
+
+@keyframes notification-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.notification-popup__head { display: flex; align-items: center; gap: 8px; }
+
+.notification-popup__badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--chip-bg);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.notification-popup__app {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.notification-popup__time {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.notification-popup__close,
+.panel-btn {
+  padding: 2px 5px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notification-popup__close:hover,
+.panel-btn:hover {
+  color: var(--ink);
+  background: var(--chip-bg-hover);
+  border-color: var(--line);
+}
+
+.notification-popup__summary { margin: 7px 0 2px; font-size: 13px; font-weight: 600; }
+
+.notification-popup__body,
+.notification-item__body {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.notification-popup__actions,
+.notification-item__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+
+.notification-popup__action,
+.notification-item__action {
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--chip-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.notification-popup__action:hover,
+.notification-item__action:hover {
+  background: var(--chip-bg-hover);
+  border-color: var(--chip-line-hover);
+}
+
+#notification-panel {
+  position: fixed;
+  top: 84px;
+  right: 18px;
+  z-index: 46;
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 36px));
+  max-height: calc(100vh - 204px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--hud-bg);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .38);
+  overflow: hidden;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+#notification-panel[hidden] { display: none; }
+
+.notification-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+
+.notification-panel__spacer { flex: 1; }
+
+.notification-list {
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.notification-item { padding: 9px 10px; border: 1px solid transparent; border-radius: 10px; }
+.notification-item + .notification-item { margin-top: 4px; }
+.notification-item:hover { background: var(--chip-bg); border-color: var(--line); }
+.notification-item[data-clickable="true"] { cursor: pointer; }
+
+.notification-item__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.notification-item__head b {
+  color: var(--ink);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.notification-item__head time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.notification-item__summary { margin: 4px 0 2px; font-size: 12px; font-weight: 600; }
+.notification-item[data-urgency="2"] .notification-item__summary { color: var(--danger); }
+
+.notification-empty {
+  margin: 0;
+  padding: 16px 14px 18px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.notification-empty[hidden] { display: none; }
+
+.hud-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.hud-badge[hidden] { display: none; }
+
+/* Em 1280 (tamanho padrão da janela aninhada) o HUD precisa abrir espaço
+   para DND/Avisos: esconde o rótulo de conexão e o sufixo da marca antes de
+   deixar os chips quebrarem linha. */
+@media (max-width: 1500px) {
   .status { display: none; }
+  .brand span { display: none; }
+  #hud { gap: 8px; }
+  .theme-chip { padding: 0 9px; }
+}
+
+@media (max-width: 980px) {
+  #notification-popups,
+  #notification-panel { top: 78px; right: 10px; }
   #hud { gap: 8px; }
   .theme-chip { padding: 0 8px; }
   .hud-action { padding: 0 8px; font-size: 11px; }

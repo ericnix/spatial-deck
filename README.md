@@ -132,8 +132,27 @@ gdbus call --session \
 
 Com o nome padrão livre (`dbus-run-session`, por exemplo), `notify-send` e
 qualquer aplicativo funcionam direto. Mensagens IPC: `notification`,
-`notification_closed`, `notification_action`, `dnd_state`,
+`notification_closed`, `notification_action`, `notification_hold`, `dnd_state`,
 `notification_history` e `notification_history_request`.
+
+### Notificações na interface
+
+- **Popups** no canto superior direito: empilham, mostram app, título, corpo,
+  hora e botões de ação. Clique no corpo dispara a ação `default`; o `×`
+  dispensa. O prazo segue `expire_timeout` (`0` nunca, `-1` = 5 s, críticas
+  ficam); passar o mouse **pausa** o prazo no shell e no daemon
+  (`notification_hold`).
+- **Críticas** (`urgency = 2`) têm borda vermelha e furam o DND.
+- **DND** no HUD: silencia popups de urgência normal/baixa (o histórico
+  continua registrando). O estado vem do `shell-services`, então sobrevive a
+  recarregar a página.
+- **Histórico** ("Avisos" no HUD): lista com app, título, corpo, hora e ações;
+  "Limpar" esvazia só a lista local. Com o painel aberto, novas notificações
+  não geram popup (ficariam atrás dele).
+- Corpo com markup (`<b>`, `<i>`, links) é convertido em texto simples e
+  escapado — não é renderizado como HTML.
+- Popups e painel entram em `ChromeRects`, então ficam acima das janelas reais
+  e recebem cliques; os vãos entre popups continuam clicáveis no canvas.
 
 ### Temas do frontend Rust
 

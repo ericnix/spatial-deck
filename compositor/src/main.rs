@@ -1788,6 +1788,7 @@ impl App {
             IpcMessage::Notification { .. }
             | IpcMessage::NotificationClosed { .. }
             | IpcMessage::NotificationAction { .. }
+            | IpcMessage::NotificationHold { .. }
             | IpcMessage::DndState { .. }
             | IpcMessage::NotificationHistory { .. }
             | IpcMessage::NotificationHistoryRequest => {

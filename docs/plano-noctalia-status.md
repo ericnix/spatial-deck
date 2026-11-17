@@ -102,7 +102,49 @@ Entregue no compositor Rust (Smithay 0.7):
 - Duas instâncias (ex.: teste em `dbus-run-session`) compartilham o mesmo
   arquivo de histórico; não há lock.
 
+## Etapa 3 — UI de notificações no frontend — CONCLUÍDA
+
+- Popups no canto superior direito (app, título, corpo, hora, ações), com
+  `expire_timeout` respeitado e **hover pausando** o prazo no shell e no
+  daemon (`notification_hold`).
+- Clique no corpo dispara a ação `default`; botões disparam a ação
+  correspondente e fecham o popup com motivo 2; `×` dispensa.
+- Críticas (`urgency = 2`) com borda vermelha e furando o DND.
+- DND no HUD, estado sincronizado por `dnd_state` (não é toggle: o valor é o
+  resultado, então reentrega é idempotente).
+- Histórico ("Avisos") com app/título/corpo/hora/ações, contador no HUD,
+  "Limpar" local e fechamento por clique fora ou pelo botão `×`.
+- Histórico recebido por `notification_history` é **mesclado por id**, não
+  substituído: corrige a corrida em que um anúncio do daemon chegava depois
+  de notificações mais novas e apagava o histórico do shell.
+- Com o painel aberto, novas notificações não abrem popup (ficariam atrás).
+- Popups e painel entram em `ChromeRects` (cada popup com seu retângulo).
+- Tema: `--danger` adicionado aos 5 temas; o resto usa as variáveis já
+  existentes.
+
+### Evidências de teste (17/11/2026)
+
+- `cargo test --workspace` verde (18 + 20 + 12 testes).
+- `./build-wasm.sh` sem erros.
+- Capturas com `notify-send`/`gdbus` no desktop real:
+  - normal, crítica (borda vermelha), ação ("Abrir log"), markup (`<b>` virou
+    texto), expiração automática;
+  - DND ligado: botão destacado, popup normal suprimido e crítica exibida;
+  - DND desligado: popup volta;
+  - tema Minimalista: popups claros coerentes com o papel milimetrado;
+  - `gtk3-demo` posicionado sob os popups via `cluster_update`: o chrome do
+    shell aparece **acima da janela real** (ChromeRects funcionando).
+
+### Limitações
+
+- Histórico é local: "Limpar" não apaga o arquivo do daemon; um novo
+  `notification_history` pode trazer itens antigos de volta.
+- Não há ícones de app nos popups (usa a inicial do nome); a rota
+  `/icon/<nome>` fica para a etapa 5.
+- Corpo não renderiza HTML por segurança (markup vira texto).
+- Acentos/emoji dependem das fontes do WebKitGTK.
+
 ## Próxima etapa
 
-Etapa 3 — UI de notificações no frontend (popups, histórico, DND). Nada
+Etapa 4 — barra modular, relógio/calendário e regiões do canvas. Nada
 iniciado.

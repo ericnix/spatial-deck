@@ -111,6 +111,10 @@ pub enum IpcMessage {
     /// Ação de uma notificação acionada no shell.
     NotificationAction { id: u32, action: String },
 
+    /// Pausa/retoma o prazo de uma notificação (hover no popup). Sem isso o
+    /// daemon fecharia a notificação por baixo do ponteiro.
+    NotificationHold { id: u32, held: bool },
+
     /// "Não perturbe" ligado/desligado. O estado é o resultado, não um toggle,
     /// para que a mensagem possa ser reentregue sem efeitos colaterais.
     DndState { active: bool },
@@ -519,6 +523,14 @@ mod tests {
         let json = action.to_json().unwrap();
         assert!(json.contains("\"type\":\"notification_action\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), action);
+
+        let hold = IpcMessage::NotificationHold {
+            id: 7,
+            held: true,
+        };
+        let json = hold.to_json().unwrap();
+        assert!(json.contains("\"type\":\"notification_hold\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), hold);
 
         let dnd = IpcMessage::DndState { active: true };
         let json = dnd.to_json().unwrap();

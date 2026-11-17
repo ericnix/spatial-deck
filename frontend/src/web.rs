@@ -17,7 +17,8 @@ use std::{
 
 use common::{
     fuzzy_score, push_recent, toggle_favorite, CanvasTheme, CanvasZoom, ChromeRect,
-    ClusterPlacement, DesktopApp, IpcMessage,
+    ClusterPlacement, DesktopApp, IpcMessage, NotificationButton, NotificationItem,
+    NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
 };
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use web_sys::{
@@ -32,6 +33,8 @@ const THEME_KEY: &str = "spatial-deck.theme";
 const FAVORITES_KEY: &str = "spatial-deck.favorites";
 const RECENT_KEY: &str = "spatial-deck.recent";
 const RECENT_LIMIT: usize = 10;
+/// Histórico de notificações mantido na interface.
+const HISTORY_LIMIT: usize = 100;
 const THEMES: [CanvasTheme; 5] = CanvasTheme::ALL;
 
 /// Altura da barra de título de uma janela real: 1px de borda + 38px da barra.
@@ -57,6 +60,16 @@ const CARDS: [Card; 4] = [
     Card { id: 3, x: 180.0, y: 640.0, w: 620.0, h: 420.0, has_window: false },
     Card { id: 4, x: 920.0, y: 600.0, w: 460.0, h: 320.0, has_window: false },
 ];
+
+/// Popup visível de uma notificação, com o prazo individual.
+struct PopupState {
+    item: NotificationItem,
+    /// Instante (`Date::now`, em ms) em que o popup some; `None` não expira.
+    deadline: Option<f64>,
+    /// Tempo restante congelado enquanto o ponteiro está sobre o popup.
+    remaining: Option<f64>,
+    paused: bool,
+}
 
 struct State {
     scale: f64,
@@ -86,6 +99,14 @@ struct State {
     card_overview: bool,
     /// Ferramenta do deck que redimensiona janelas reais ao arrastar.
     resize_tool: bool,
+    /// Histórico de notificações (mais recente primeiro).
+    notifications: Vec<NotificationItem>,
+    /// Popups empilhados no canto superior direito.
+    popups: Vec<PopupState>,
+    /// "Não perturbe": silencia popups de urgência normal/baixa.
+    dnd: bool,
+    /// Painel de histórico aberto.
+    notif_panel_open: bool,
 }
 
 impl Default for State {
@@ -111,6 +132,10 @@ impl Default for State {
             cards: CARDS.to_vec(),
             card_overview: false,
             resize_tool: false,
+            notifications: Vec::new(),
+            popups: Vec::new(),
+            dnd: false,
+            notif_panel_open: false,
         }
     }
 }
@@ -138,6 +163,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_overview_control(&document)?;
     setup_cards(&document)?;
     setup_deck_apps(&window, &document)?;
+    setup_notifications(&window, &document)?;
     drawing::init(&document)?;
     connect_websocket();
 
@@ -1273,6 +1299,7 @@ fn connect_websocket() {
         send_transform();
         send_cluster();
         send_theme();
+        send_message(&IpcMessage::NotificationHistoryRequest);
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             send_chrome_rects(&document);
         }
@@ -1391,6 +1418,37 @@ fn send_chrome_rects(document: &Document) {
             h: rect.height(),
         });
     }
+    // Popups e painel de notificações são chrome: precisam ficar acima das
+    // janelas reais e receber os cliques. Cada popup vira um retângulo
+    // próprio para os vãos entre eles continuarem clicáveis no canvas.
+    if let Ok(nodes) = document.query_selector_all(".notification-popup") {
+        for index in 0..nodes.length() {
+            let Some(node) = nodes.item(index) else {
+                continue;
+            };
+            let Ok(element) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            let rect: DomRect = element.get_bounding_client_rect();
+            rects.push(ChromeRect {
+                x: rect.left(),
+                y: rect.top(),
+                w: rect.width(),
+                h: rect.height(),
+            });
+        }
+    }
+    if let Some(panel) = document.get_element_by_id("notification-panel") {
+        if !panel.has_attribute("hidden") {
+            let rect: DomRect = panel.get_bounding_client_rect();
+            rects.push(ChromeRect {
+                x: rect.left(),
+                y: rect.top(),
+                w: rect.width(),
+                h: rect.height(),
+            });
+        }
+    }
     let hud_bottom = document
         .get_element_by_id("hud")
         .map(|hud| {
@@ -1484,7 +1542,72 @@ fn handle_server_message(text: &str) {
                 }
             }
         }
+        IpcMessage::Notification {
+            id,
+            app_name,
+            summary,
+            body,
+            icon,
+            urgency,
+            actions,
+            timeout,
+            ..
+        } => {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                handle_notification(
+                    &document,
+                    NotificationItem {
+                        id,
+                        app_name,
+                        summary,
+                        body,
+                        icon,
+                        urgency,
+                        actions,
+                        timestamp_ms: js_sys::Date::now() as u64,
+                    },
+                    timeout,
+                );
+            }
+        }
+        IpcMessage::NotificationClosed { id, .. } => {
+            remove_popup(id);
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                let _ = render_notifications(&document);
+            }
+        }
+        IpcMessage::NotificationHistory { items } => {
+            // Mescla por id: uma resposta de histórico pode chegar depois de
+            // notificações mais novas (corrida com o anúncio do daemon) e não
+            // pode apagá-las. O mais recente (timestamp) fica no topo.
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                for item in items {
+                    if state.notifications.iter().all(|known| known.id != item.id) {
+                        state.notifications.push(item);
+                    }
+                }
+                state
+                    .notifications
+                    .sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+                if state.notifications.len() > HISTORY_LIMIT {
+                    state.notifications.truncate(HISTORY_LIMIT);
+                }
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                let _ = render_notifications(&document);
+            }
+        }
+        IpcMessage::DndState { active } => {
+            STATE.with(|state| state.borrow_mut().dnd = active);
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                update_dnd_button(&document, active);
+            }
+        }
         IpcMessage::CloseWindow { .. } => {}
+        IpcMessage::NotificationAction { .. }
+        | IpcMessage::NotificationHold { .. }
+        | IpcMessage::NotificationHistoryRequest => {}
         _ => {}
     }
 }
@@ -2046,6 +2169,597 @@ fn send_launch_app(exec: &str) {
     send_message(&IpcMessage::LaunchApp {
         exec: exec.to_owned(),
     });
+}
+
+
+// ---------------------------------------------------------------------------
+// Notificações
+// ---------------------------------------------------------------------------
+
+/// Mesmo padrão do daemon: `0` nunca expira, `> 0` milissegundos e `-1` usa o
+/// padrão de 5 s (notificações críticas ficam até serem fechadas).
+fn resolve_notification_timeout(timeout: i32, urgency: u8) -> Option<u32> {
+    if timeout > 0 {
+        Some(timeout as u32)
+    } else if timeout == 0 {
+        None
+    } else if urgency >= 2 {
+        None
+    } else {
+        Some(5_000)
+    }
+}
+
+fn setup_notifications(window: &Window, document: &Document) -> Result<(), JsValue> {
+    let _ = window;
+
+    if let Ok(button) = by_id(document, "dnd-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let active = STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.dnd = !state.dnd;
+                state.dnd
+            });
+            update_dnd_button(&document_for_click, active);
+            send_message(&IpcMessage::DndState { active });
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "notifications-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = STATE.with(|state| !state.borrow().notif_panel_open);
+            set_notification_panel(&document_for_click, open);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "notification-close") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            set_notification_panel(&document_for_click, false);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "notification-clear") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            STATE.with(|state| state.borrow_mut().notifications.clear());
+            let _ = render_notifications(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Clique fora fecha o painel (sem interferir no pan/desenho do canvas).
+    let document_for_outside = document.clone();
+    let outside = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        if !STATE.with(|state| state.borrow().notif_panel_open) {
+            return;
+        }
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if target
+            .closest("#notification-panel, #notifications-btn")
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        set_notification_panel(&document_for_outside, false);
+    });
+    document.add_event_listener_with_callback("pointerdown", outside.as_ref().unchecked_ref())?;
+    outside.forget();
+
+    bind_notification_popups(document)?;
+    bind_notification_history(document)?;
+    start_notification_ticker();
+    let _ = render_notifications(document);
+    Ok(())
+}
+
+fn bind_notification_popups(document: &Document) -> Result<(), JsValue> {
+    let Ok(container) = by_id(document, "notification-popups") else {
+        return Ok(());
+    };
+
+    let document_for_click = document.clone();
+    let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Ok(Some(card)) = target.closest("[data-notif-id]") else {
+            return;
+        };
+        let Some(id) = card
+            .get_attribute("data-notif-id")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            return;
+        };
+
+        let is_close = target
+            .closest("[data-notif-close]")
+            .ok()
+            .flatten()
+            .is_some();
+        let action = if is_close {
+            None
+        } else if let Ok(Some(button)) = target.closest("[data-notif-action]") {
+            button.get_attribute("data-notif-action")
+        } else {
+            default_notification_action(id)
+        };
+
+        if let Some(action) = action.as_deref() {
+            send_message(&IpcMessage::NotificationAction {
+                id,
+                action: action.to_owned(),
+            });
+        }
+        if is_close || action.is_some() {
+            remove_popup(id);
+            send_message(&IpcMessage::NotificationClosed {
+                id,
+                reason: NOTIFICATION_CLOSED_DISMISSED,
+            });
+            let _ = render_notifications(&document_for_click);
+        }
+    });
+    container.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+
+    // Hover pausa o prazo; o daemon recebe o mesmo aviso para não fechar a
+    // notificação por baixo do ponteiro.
+    let over = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        let Some(card) = notification_card_from_event(event.as_ref()) else {
+            return;
+        };
+        let Some(id) = card
+            .get_attribute("data-notif-id")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let changed = STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let Some(popup) = state
+                .popups
+                .iter_mut()
+                .find(|popup| popup.item.id == id)
+            else {
+                return false;
+            };
+            if popup.paused {
+                return false;
+            }
+            popup.paused = true;
+            let now = js_sys::Date::now();
+            popup.remaining = popup.deadline.map(|deadline| (deadline - now).max(0.0));
+            popup.deadline = None;
+            true
+        });
+        if changed {
+            send_message(&IpcMessage::NotificationHold { id, held: true });
+        }
+    });
+    container.add_event_listener_with_callback("pointerover", over.as_ref().unchecked_ref())?;
+    over.forget();
+
+    let out = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        let Some(card) = notification_card_from_event(event.as_ref()) else {
+            return;
+        };
+        // Troca entre filhos do mesmo popup não retoma o prazo.
+        let inside = event
+            .related_target()
+            .and_then(|target| target.dyn_into::<web_sys::Node>().ok())
+            .is_some_and(|node| card.contains(Some(&node)));
+        if inside {
+            return;
+        }
+        let Some(id) = card
+            .get_attribute("data-notif-id")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let changed = STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let Some(popup) = state
+                .popups
+                .iter_mut()
+                .find(|popup| popup.item.id == id)
+            else {
+                return false;
+            };
+            if !popup.paused {
+                return false;
+            }
+            popup.paused = false;
+            if let Some(remaining) = popup.remaining.take() {
+                popup.deadline = Some(js_sys::Date::now() + remaining);
+            }
+            true
+        });
+        if changed {
+            send_message(&IpcMessage::NotificationHold { id, held: false });
+        }
+    });
+    container.add_event_listener_with_callback("pointerout", out.as_ref().unchecked_ref())?;
+    out.forget();
+    Ok(())
+}
+
+fn bind_notification_history(document: &Document) -> Result<(), JsValue> {
+    let Ok(list) = by_id(document, "notification-list") else {
+        return Ok(());
+    };
+    let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        let Ok(Some(card)) = target.closest("[data-notif-id]") else {
+            return;
+        };
+        let Some(id) = card
+            .get_attribute("data-notif-id")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let action = if let Ok(Some(button)) = target.closest("[data-notif-action]") {
+            button.get_attribute("data-notif-action")
+        } else {
+            default_notification_action(id)
+        };
+        if let Some(action) = action {
+            send_message(&IpcMessage::NotificationAction { id, action });
+        }
+    });
+    list.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+    click.forget();
+    Ok(())
+}
+
+fn notification_card_from_event(event: &Event) -> Option<Element> {
+    let target = event.target()?.dyn_into::<Element>().ok()?;
+    target.closest("[data-notif-id]").ok().flatten()
+}
+
+fn default_notification_action(id: u32) -> Option<String> {
+    STATE.with(|state| {
+        let state = state.borrow();
+        let item = state
+            .popups
+            .iter()
+            .find(|popup| popup.item.id == id)
+            .map(|popup| &popup.item)
+            .or_else(|| state.notifications.iter().find(|item| item.id == id))?;
+        item.actions
+            .iter()
+            .find(|action| action.key == "default")
+            .map(|action| action.key.clone())
+    })
+}
+
+fn remove_popup(id: u32) {
+    STATE.with(|state| {
+        state
+            .borrow_mut()
+            .popups
+            .retain(|popup| popup.item.id != id);
+    });
+}
+
+fn handle_notification(document: &Document, item: NotificationItem, timeout: i32) {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        // Substituição (replaces_id): o mesmo id troca de conteúdo.
+        state.popups.retain(|popup| popup.item.id != item.id);
+        state.notifications.retain(|entry| entry.id != item.id);
+        state.notifications.insert(0, item.clone());
+        if state.notifications.len() > HISTORY_LIMIT {
+            state.notifications.truncate(HISTORY_LIMIT);
+        }
+
+        // DND silencia urgência normal/baixa; críticas sempre aparecem. Com o
+        // painel aberto o popup ficaria escondido atrás dele: só o histórico.
+        if (state.dnd && item.urgency < 2) || state.notif_panel_open {
+            return;
+        }
+
+        let deadline = resolve_notification_timeout(timeout, item.urgency)
+            .map(|ms| js_sys::Date::now() + ms as f64);
+        state.popups.insert(
+            0,
+            PopupState {
+                item,
+                deadline,
+                remaining: None,
+                paused: false,
+            },
+        );
+    });
+
+    let _ = render_notifications(document);
+}
+
+fn start_notification_ticker() {
+    let callback = Closure::<dyn FnMut()>::new(|| {
+        let now = js_sys::Date::now();
+        let expired = STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            let expired: Vec<u32> = state
+                .popups
+                .iter()
+                .filter(|popup| {
+                    !popup.paused && popup.deadline.is_some_and(|deadline| deadline <= now)
+                })
+                .map(|popup| popup.item.id)
+                .collect();
+            if !expired.is_empty() {
+                state
+                    .popups
+                    .retain(|popup| !expired.contains(&popup.item.id));
+            }
+            expired
+        });
+        if expired.is_empty() {
+            return;
+        }
+        for id in expired {
+            send_message(&IpcMessage::NotificationClosed {
+                id,
+                reason: NOTIFICATION_CLOSED_EXPIRED,
+            });
+        }
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            let _ = render_notifications(&document);
+        }
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            250,
+        );
+    }
+    callback.forget();
+}
+
+fn render_notifications(document: &Document) -> Result<(), JsValue> {
+    render_notification_popups(document)?;
+    render_notification_history(document)?;
+    update_notification_badge(document);
+    send_chrome_rects(document);
+    Ok(())
+}
+
+fn render_notification_popups(document: &Document) -> Result<(), JsValue> {
+    let html = STATE.with(|state| {
+        let state = state.borrow();
+        state
+            .popups
+            .iter()
+            .map(notification_popup_html)
+            .collect::<String>()
+    });
+    if let Ok(container) = by_id(document, "notification-popups") {
+        container.set_inner_html(&html);
+    }
+    Ok(())
+}
+
+fn render_notification_history(document: &Document) -> Result<(), JsValue> {
+    let (html, count) = STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state
+                .notifications
+                .iter()
+                .map(notification_item_html)
+                .collect::<String>(),
+            state.notifications.len(),
+        )
+    });
+    if let Ok(list) = by_id(document, "notification-list") {
+        list.set_inner_html(&html);
+    }
+    if let Ok(empty) = by_id(document, "notification-empty") {
+        if count == 0 {
+            let _ = empty.remove_attribute("hidden");
+        } else {
+            let _ = empty.set_attribute("hidden", "");
+        }
+    }
+    Ok(())
+}
+
+fn notification_popup_html(popup: &PopupState) -> String {
+    let item = &popup.item;
+    let initial = item
+        .app_name
+        .chars()
+        .next()
+        .map(|character| character.to_uppercase().collect::<String>())
+        .unwrap_or_else(|| "•".to_owned());
+    let actions = notification_actions_html(
+        &item.actions,
+        "notification-popup__actions",
+        "notification-popup__action",
+    );
+    let body = if item.body.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p class=\"notification-popup__body\">{}</p>",
+            escape_html(&plain_text(&item.body))
+        )
+    };
+    format!(
+        "<article class=\"notification-popup\" data-notif-id=\"{id}\" data-urgency=\"{urgency}\">\
+         <div class=\"notification-popup__head\">\
+         <span class=\"notification-popup__badge\">{initial}</span>\
+         <span class=\"notification-popup__app\">{app}</span>\
+         <span class=\"notification-popup__time\">{time}</span>\
+         <button class=\"notification-popup__close\" type=\"button\" data-notif-close aria-label=\"Dispensar\">×</button>\
+         </div>\
+         <p class=\"notification-popup__summary\">{summary}</p>\
+         {body}{actions}</article>",
+        id = item.id,
+        urgency = item.urgency,
+        initial = escape_html(&initial),
+        app = escape_html(&item.app_name),
+        time = notification_time(item.timestamp_ms),
+        summary = escape_html(&item.summary),
+        body = body,
+        actions = actions,
+    )
+}
+
+fn notification_item_html(item: &NotificationItem) -> String {
+    let clickable = item.actions.iter().any(|action| action.key == "default");
+    let actions = notification_actions_html(
+        &item.actions,
+        "notification-item__actions",
+        "notification-item__action",
+    );
+    let body = if item.body.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p class=\"notification-item__body\">{}</p>",
+            escape_html(&plain_text(&item.body))
+        )
+    };
+    format!(
+        "<li class=\"notification-item\" data-notif-id=\"{id}\" data-urgency=\"{urgency}\" data-clickable=\"{clickable}\">\
+         <div class=\"notification-item__head\"><b>{app}</b><time>{time}</time></div>\
+         <p class=\"notification-item__summary\">{summary}</p>\
+         {body}{actions}</li>",
+        id = item.id,
+        urgency = item.urgency,
+        clickable = clickable,
+        app = escape_html(&item.app_name),
+        time = notification_time(item.timestamp_ms),
+        summary = escape_html(&item.summary),
+        body = body,
+        actions = actions,
+    )
+}
+
+fn notification_actions_html(
+    actions: &[NotificationButton],
+    container_class: &str,
+    button_class: &str,
+) -> String {
+    if actions.is_empty() {
+        return String::new();
+    }
+    let buttons = actions
+        .iter()
+        .map(|action| {
+            format!(
+                "<button type=\"button\" class=\"{button_class}\" data-notif-action=\"{key}\">{label}</button>",
+                key = escape_html(&action.key),
+                label = escape_html(&action.label),
+            )
+        })
+        .collect::<String>();
+    format!("<div class=\"{container_class}\">{buttons}</div>")
+}
+
+fn notification_time(timestamp_ms: u64) -> String {
+    let date = js_sys::Date::new(&JsValue::from_f64(timestamp_ms as f64));
+    format!("{:02}:{:02}", date.get_hours(), date.get_minutes())
+}
+
+/// Remove marcação básica (`<b>`, `<i>`, `<a …>`) antes de escapar o texto:
+/// o corpo vem com markup opcional e não é renderizado como HTML.
+fn plain_text(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut in_tag = false;
+    for character in input.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => output.push(character),
+            _ => {}
+        }
+    }
+    output
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+fn update_notification_badge(document: &Document) {
+    let count = STATE.with(|state| state.borrow().notifications.len());
+    if let Ok(badge) = by_id(document, "notifications-count") {
+        if count == 0 {
+            let _ = badge.set_attribute("hidden", "");
+        } else {
+            let _ = badge.remove_attribute("hidden");
+            let text = if count > 99 {
+                "99+".to_owned()
+            } else {
+                count.to_string()
+            };
+            let _ = badge.set_inner_html(&text);
+        }
+    }
+}
+
+fn update_dnd_button(document: &Document, active: bool) {
+    if let Ok(button) = by_id(document, "dnd-btn") {
+        let _ = button.set_attribute("aria-pressed", if active { "true" } else { "false" });
+        let _ = button.set_attribute(
+            "title",
+            if active {
+                "Não perturbe ligado — críticas ainda aparecem"
+            } else {
+                "Não perturbe (silencia notificações normais)"
+            },
+        );
+    }
+}
+
+fn set_notification_panel(document: &Document, open: bool) {
+    STATE.with(|state| state.borrow_mut().notif_panel_open = open);
+    if let Ok(panel) = by_id(document, "notification-panel") {
+        if open {
+            let _ = panel.remove_attribute("hidden");
+        } else {
+            let _ = panel.set_attribute("hidden", "");
+        }
+    }
+    if let Ok(button) = by_id(document, "notifications-btn") {
+        let _ = button.set_attribute("aria-expanded", if open { "true" } else { "false" });
+    }
+    if open {
+        let _ = render_notification_history(document);
+    }
+    send_chrome_rects(document);
 }
 
 pub(crate) fn show_toast(document: &Document, message: &str) {

@@ -82,6 +82,8 @@ screen_y = world_y * scale + offset_y</pre>
       <button id="zoom-fit" class="zoom-btn zoom-btn--text" type="button" title="Enquadrar tudo (Ctrl+Shift+F)">Ajustar</button>
     </div>
     <div class="hud__sep"></div>
+    <button id="dnd-btn" class="hud-action" type="button" aria-pressed="false" title="Não perturbe (silencia notificações normais)">DND</button>
+    <button id="notifications-btn" class="hud-action" type="button" aria-expanded="false" title="Histórico de notificações">Avisos <b id="notifications-count" class="hud-badge" hidden>0</b></button>
     <button id="overview-btn" class="hud-action" type="button" aria-pressed="false" title="Visão geral das janelas (Ctrl+Alt+O)">Visão geral</button>
   </header>
 
@@ -183,6 +185,19 @@ screen_y = world_y * scale + offset_y</pre>
   <textarea id="draw-text-editor" class="draw-text-editor" rows="1" spellcheck="false" hidden aria-label="Editar texto do canvas"></textarea>
   <input id="image-input" type="file" accept="image/*" multiple hidden>
   <div id="toast" role="status" aria-live="polite"></div>
+
+  <section id="notification-popups" aria-live="polite" aria-label="Notificações"></section>
+
+  <section id="notification-panel" hidden aria-label="Histórico de notificações">
+    <header class="notification-panel__head">
+      <b>Notificações</b>
+      <span class="notification-panel__spacer"></span>
+      <button id="notification-clear" type="button" class="panel-btn">Limpar</button>
+      <button id="notification-close" type="button" class="panel-btn" aria-label="Fechar histórico">×</button>
+    </header>
+    <ul id="notification-list" class="notification-list"></ul>
+    <p id="notification-empty" class="notification-empty">Nada por aqui.</p>
+  </section>
 
   <script type="module">
     import init, { start } from '/pkg/spatial_deck_frontend.js';
