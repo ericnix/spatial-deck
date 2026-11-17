@@ -1,15 +1,39 @@
-# Padrão
+# Spatial Deck (Padrão)
 
-Um desktop Wayland do zero, em C (compositor + host) e JS/CSS/HTML (em `web/`).
+Um desktop Wayland **construído do zero**: compositor, shell e serviços, sem
+GNOME, KDE ou wlroots como dependência obrigatória.
 
-Em vez de uma barra de tarefas, um **deck trapezoidal** que cresce ao passar o
-mouse. Em vez de um wallpaper, um **canvas infinito** onde todas as janelas
-abertas aparecem como fichas, e onde dá para escrever notas, colocar imagens e
-vídeos.
+Em vez de uma barra de tarefas, um **deck trapezoidal** que cresce quando o
+mouse se aproxima. Em vez de um wallpaper, um **canvas infinito** com zoom
+real, onde cada janela vira uma ficha no espaço e imagens podem ficar **acima
+ou abaixo** delas.
 
-> **Implementação Rust:** o workspace Cargo em `common/`, `compositor/src/main.rs`
-> e `frontend/` reimplementa o deck em Rust/Smithay + WebAssembly. A
-> implementação C original continua no repositório e pode ser usada em paralelo.
+A implementação principal é em **Rust** (Smithay + WebAssembly + GTK/WebKit),
+com serviços D-Bus próprios. A implementação original em **C** (wlroots +
+gtk-layer-shell) continua no repositório como referência.
+
+## Recursos
+
+- **Canvas infinito** com pan/zoom que escala as superfícies reais dos
+  clientes, não só a imagem.
+- **Deck trapezoidal** com caneta, linha, retângulo, elipse, texto, borracha e
+  imagens (redimensionadas/recomprimidas antes de entrar no canvas),
+  desfazer/refazer e grade.
+- **Janelas reais** Wayland e X11 (XWayland próprio), com arrastar,
+  redimensionar, maximizar/restaurar e visão geral em miniaturas ao vivo.
+- **Camadas**: botões ▴/▾ em cada ficha mudam a ordem das janelas; imagens
+  selecionadas alternam entre acima e abaixo das janelas.
+- **Barra modular** (esquerda/centro/direita) configurável, com relógio e
+  calendário, **regiões do canvas** (viewpoints nomeados com `Ctrl+1..9`),
+  temas, zoom e notificações.
+- **Notificações** como daemon `org.freedesktop.Notifications` com popups,
+  histórico, DND e ações.
+- **Bandeja do sistema** (StatusNotifierItem) e **controle de mídia** (MPRIS)
+  na barra.
+- **Cinco temas**: Padrão, Minimalista, Minimalista Negro, Ferro Oxidado e
+  Nord.
+- **Janela aninhada redimensionável** (mínimo 720×480): o compositor
+  reconfigura a saída e o desktop inteiro acompanha.
 
 ## Implementação Rust (workspace Cargo)
 
@@ -19,6 +43,7 @@ vídeos.
 | `compositor/` | Compositor Wayland com **Smithay 0.7** e backend aninhado **winit**; `Space<Window>` para as janelas `xdg_toplevel`; servidor Tokio com socket Unix, WebSocket e HTTP estático; bordas dos temas Minimalistas em `minimalist_render.rs`. |
 | `frontend/` | Frontend **wasm-bindgen + web-sys**: canvas HTML5, pan/zoom, temas, glow da janela ativa, barra modular (relógio/calendário, regiões), IPC WebSocket, camada SVG de desenho/imagens e deck trapezoidal de ferramentas/aplicativos; CSS e grid de papel milimetrado em `minimalist_theme.rs` (claro) e `minimalist_dark_theme.rs` (negro). |
 | `shell-rust/` | Cliente C **GTK3 + WebKitGTK** (`spatial-deck-shell`) que hospeda a página dentro do compositor. É uma janela sem decoração; o compositor a reconhece pelo `app_id` `spatial-deck-shell`, fixa em `(0,0)` no tamanho da saída, desenha abaixo das janelas dos apps e a exclui do pan/zoom e do posicionamento do canvas. |
+| `shell-services/` | Serviços D-Bus do shell (`spatial-deck-services`): notificações, histórico/DND, regiões do canvas, bandeja SNI e player MPRIS. Conversa com o compositor pelo socket Unix e persiste configs em `~/.config/spatial-deck/`. |
 
 ### Build
 
@@ -36,11 +61,17 @@ Se `wasm-pack` não estiver instalado, `./build-wasm.sh` tenta o fallback
 ./run-rust.sh
 ```
 
-O script compila o workspace, sobe o compositor e abre o `spatial-deck-shell`
-(GTK/WebKit) em `WAYLAND_DISPLAY=spatial-deck`, carregando a UI em
-`http://127.0.0.1:7338/?theme=…`. Sem o shell o compositor mostra apenas o
-fundo sólido do tema — é ele que pinta o canvas, o deck e as fichas. Ao sair
-(`Ctrl-C`), os dois processos são encerrados e o socket é limpo.
+O script compila o workspace, sobe o compositor, abre o `spatial-deck-shell`
+(GTK/WebKit) em `WAYLAND_DISPLAY=spatial-deck` e inicia o
+`spatial-deck-services`. A UI é carregada de `http://127.0.0.1:7338/?theme=…`.
+Sem o shell o compositor mostra apenas o fundo sólido do tema — é ele que pinta
+o canvas, o deck e as fichas. Ao sair (`Ctrl-C`), os três processos são
+encerrados e o socket é limpo.
+
+Logs: `/tmp/spatial-deck.log` (compositor), `/tmp/spatial-deck-shell.log`
+(shell) e `/tmp/spatial-deck-services.log` (serviços). O shell roda com
+`GTK_USE_PORTAL=0` para o seletor de arquivos abrir dentro do deck, e não no
+portal da sessão hospedeira.
 
 A janela do compositor é trazida para a frente automaticamente (`wmctrl -a`,
 quando disponível) e marcada como `above` (`wmctrl -r 'Spatial Deck' -b
@@ -51,7 +82,7 @@ Variáveis úteis:
 
 | Variável | Padrão | Uso |
 | --- | --- | --- |
-| `SPATIAL_DECK_THEME` | `default` | Tema inicial passado na URL (`default`, `minimalist`, `minimalist-dark`, `oxidized-iron`). |
+| `SPATIAL_DECK_THEME` | `default` | Tema inicial passado na URL (`default`, `minimalist`, `minimalist-dark`, `oxidized-iron`, `nord`). |
 | `SPATIAL_DECK_URL` | `http://127.0.0.1:7338/?theme=…` | URL carregada pelo shell; sobrepõe o tema da URL. |
 | `SPATIAL_DECK_SOFTWARE` | desligado | `1` desativa a aceleração de hardware do WebKit no shell (fallback para drivers GL problemáticos). |
 | `RUST_LOG` | `info` | Nível de log do compositor (log em `/tmp/spatial-deck.log`). |
@@ -75,8 +106,8 @@ WAYLAND_DISPLAY=spatial-deck foot
 
 O frontend pode ser aberto no navegador da sessão normal em
 `http://127.0.0.1:7338/`. Temas também podem ser testados pela URL:
-`?theme=default`, `?theme=minimalist`, `?theme=minimalist-dark` ou
-`?theme=oxidized-iron`.
+`?theme=default`, `?theme=minimalist`, `?theme=minimalist-dark`,
+`?theme=oxidized-iron` ou `?theme=nord`.
 
 ### Protocolos Wayland suportados
 
@@ -411,6 +442,12 @@ O JSON é internamente marcado por `type` (snake_case):
 {"type":"toggle_overview"}
 {"type":"overview_state","active":true,"windows":2}
 {"type":"toast","message":"Nenhuma janela real aberta"}
+{"type":"raise_window","window_id":2}
+{"type":"lower_window","window_id":2}
+{"type":"region_list","regions":[{"id":1,"name":"Trabalho","scale":1.0,"offset_x":0.0,"offset_y":0.0}]}
+{"type":"notification","id":3,"app_name":"notify-send","summary":"Oi","body":"corpo","icon":"","urgency":1,"actions":[],"timeout":-1,"replaces_id":0}
+{"type":"tray_update","items":[{"id":":1.89/StatusNotifierItem","title":"App","icon_name":"app","status":"Active","has_menu":true,"item_is_menu":false}]}
+{"type":"media_state","player":"org.mpris.MediaPlayer2.vlc","title":"Faixa","artist":"Artista","status":"Playing","can_next":true,"can_prev":true}
 ```
 
 - `CanvasTransform` aplica `screen_x = world_x * scale + offset_x` e
@@ -447,13 +484,15 @@ ao voltar abaixo do limiar, envia `state: false`. O compositor responde com
 ### Observações
 
 - O backend é aninhado: não precisa de TTY, root nem DRM.
-- O compositor mantém `wl_seat`, teclado e ponteiro básicos; clientes que
-  dependem de protocolos opcionais (layer-shell, screencopy, text-input)
-  continuam avisando no stderr.
+- O compositor mantém `wl_seat`, teclado e ponteiro básicos e já implementa
+  `wlr-layer-shell`, `ext-foreign-toplevel-list` e `xdg-activation`. Ainda não
+  há `wlr-screencopy`/`text-input`: clientes que dependem deles avisam no
+  stderr.
 - `SPATIAL_DECK_WEB_ROOT` pode apontar para outro diretório estático.
 - `cargo test -p common` cobre o round-trip das mensagens IPC e os nomes
   serializados dos temas; `cargo test -p compositor` cobre a geometria das
-  bordas compartilhadas pelos temas Minimalista e Minimalista Negro.
+  bordas e das regiões/visão geral; `cargo test -p shell-services` cobre o
+  store de notificações/regiões e o servidor D-Bus.
 
 ## Peças (implementação C original)
 
