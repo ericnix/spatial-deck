@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="pt-BR" data-canvas-theme="default">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spatial Deck · Rust/WASM</title>
+  <link rel="stylesheet" href="/rust/style.css">
+</head>
+<body>
+  <canvas id="grid" aria-hidden="true"></canvas>
+
+  <div id="viewport">
+    <svg id="draw-layer" data-tool="pen" aria-label="Camada de desenho do canvas infinito">
+      <g id="draw-world"></g>
+      <g id="draw-overlay" pointer-events="none"></g>
+    </svg>
+
+    <div id="world">
+      <article id="card-1" class="window-card" data-window-id="1" style="left:90px;top:90px;width:720px;height:480px">
+        <div class="window-card__bar"><span class="dots"><i></i><i></i><i></i></span><b>terminal</b><span class="window-card__id">1</span><button class="window-card__close" type="button" aria-label="Fechar janela">×</button></div>
+        <div class="window-card__body">
+          <p class="prompt">spatial-deck ~ $ <span>cargo run -p compositor</span></p>
+          <p class="dim">canvas transform → IPC → Smithay Space</p>
+          <pre>screen_x = world_x * scale + offset_x
+screen_y = world_y * scale + offset_y</pre>
+        </div>
+      </article>
+
+      <article id="card-2" class="window-card" data-window-id="2" style="left:880px;top:130px;width:520px;height:360px">
+        <div class="window-card__bar"><span class="dots"><i></i><i></i><i></i></span><b>cluster</b><span class="window-card__id">2</span><button class="window-card__close" type="button" aria-label="Fechar janela">×</button></div>
+        <div class="window-card__body">
+          <h2>ClusterUpdate</h2>
+          <p class="dim">Posições de mundo enviadas ao compositor.</p>
+          <ul class="nodes">
+            <li><span></span> nota</li>
+            <li><span></span> vídeo</li>
+            <li><span></span> imagem</li>
+          </ul>
+        </div>
+      </article>
+
+      <article id="card-3" class="window-card" data-window-id="3" style="left:180px;top:640px;width:620px;height:420px">
+        <div class="window-card__bar"><span class="dots"><i></i><i></i><i></i></span><b>tema</b><span class="window-card__id">3</span><button class="window-card__close" type="button" aria-label="Fechar janela">×</button></div>
+        <div class="window-card__body">
+          <h2>Quatro peles, um canvas</h2>
+          <p class="dim">default · minimalist · minimalist-dark · oxidized-iron · nord</p>
+          <div class="swatches"><i></i><i></i><i></i><i></i></div>
+        </div>
+      </article>
+
+      <article id="card-4" class="window-card" data-window-id="4" style="left:920px;top:600px;width:460px;height:320px">
+        <div class="window-card__bar"><span class="dots"><i></i><i></i><i></i></span><b>wasm</b><span class="window-card__id">4</span><button class="window-card__close" type="button" aria-label="Fechar janela">×</button></div>
+        <div class="window-card__body">
+          <h2>frontend.wasm</h2>
+          <p class="dim">Pan, zoom, temas, desenho e imagens em Rust.</p>
+          <p class="badge">wasm32-unknown-unknown</p>
+        </div>
+      </article>
+    </div>
+  </div>
+
+  <div id="active-window-glow" aria-hidden="true"></div>
+
+  <header id="hud">
+    <div class="brand">SPATIAL DECK <span>rust/wasm</span></div>
+    <div class="hud__sep"></div>
+    <div id="status" class="status">conectando…</div>
+    <div class="hud__spacer"></div>
+    <div class="themes" role="group" aria-label="Tema do canvas">
+      <button id="theme-default" class="theme-chip" data-theme="default" aria-pressed="true">Padrão</button>
+      <button id="theme-minimalist" class="theme-chip" data-theme="minimalist" aria-pressed="false">Minimalista</button>
+      <button id="theme-minimalist-dark" class="theme-chip" data-theme="minimalist-dark" aria-pressed="false">Minimalista Negro</button>
+      <button id="theme-oxidized-iron" class="theme-chip" data-theme="oxidized-iron" aria-pressed="false">Ferro Oxidado</button>
+      <button id="theme-nord" class="theme-chip" data-theme="nord" aria-pressed="false">Nord</button>
+    </div>
+    <div class="hud__sep"></div>
+    <div class="zoom" role="group" aria-label="Zoom do canvas">
+      <button id="zoom-out" class="zoom-btn" type="button" title="Diminuir zoom (Ctrl+-)" aria-label="Diminuir zoom">−</button>
+      <span>zoom <b id="zoom">100%</b></span>
+      <button id="zoom-in" class="zoom-btn" type="button" title="Aumentar zoom (Ctrl+=)" aria-label="Aumentar zoom">+</button>
+      <button id="zoom-reset" class="zoom-btn zoom-btn--text" type="button" title="Voltar para 100% (Ctrl+0)">1:1</button>
+      <button id="zoom-fit" class="zoom-btn zoom-btn--text" type="button" title="Enquadrar tudo (Ctrl+Shift+F)">Ajustar</button>
+    </div>
+    <div class="hud__sep"></div>
+    <button id="overview-btn" class="hud-action" type="button" aria-pressed="false" title="Visão geral das janelas (Ctrl+Alt+O)">Visão geral</button>
+  </header>
+
+  <div id="deck-shell">
+    <div class="deck__frame" aria-hidden="true"></div>
+    <div class="deck__panel" aria-hidden="true"></div>
+
+    <nav id="deck" role="toolbar" aria-label="Ferramentas de desenho e aplicativos">
+      <div class="deck__row">
+      <span class="deck__grip" aria-hidden="true"></span>
+
+      <div class="deck__group" role="group" aria-label="Ferramentas">
+        <button id="tool-select" class="tool" type="button" aria-pressed="false" title="Selecionar e mover (V)" aria-label="Selecionar e mover">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3l14 8-6 1.6L10 20 5 3z"/></svg>
+        </button>
+        <button id="tool-pan" class="tool" type="button" aria-pressed="false" title="Navegar pelo canvas (H)" aria-label="Navegar pelo canvas">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 12V6a1.5 1.5 0 0 1 3 0v5"/><path d="M11 11V4.5a1.5 1.5 0 0 1 3 0V11"/><path d="M14 11V6a1.5 1.5 0 0 1 3 0v7"/><path d="M8 12l-1.6-1.6a1.5 1.5 0 0 0-2.1 2.1L8 18a5 5 0 0 0 4 2h2a5 5 0 0 0 5-5v-2"/></svg>
+        </button>
+        <button id="tool-resize" class="tool" type="button" aria-pressed="false" title="Redimensionar janelas" aria-label="Redimensionar janelas">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H4v5"/><path d="M4 4l6 6"/><path d="M15 20h5v-5"/><path d="M20 20l-6-6"/></svg>
+        </button>
+        <button id="tool-pen" class="tool" type="button" aria-pressed="true" title="Caneta livre (P)" aria-label="Caneta livre">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20z"/><path d="M14 6l4 4"/></svg>
+        </button>
+        <button id="tool-line" class="tool" type="button" aria-pressed="false" title="Linha (L)" aria-label="Linha">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L20 4"/></svg>
+        </button>
+        <button id="tool-rect" class="tool" type="button" aria-pressed="false" title="Retângulo (R)" aria-label="Retângulo">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="1.5"/></svg>
+        </button>
+        <button id="tool-ellipse" class="tool" type="button" aria-pressed="false" title="Elipse (O)" aria-label="Elipse">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="8" ry="6"/></svg>
+        </button>
+        <button id="tool-text" class="tool" type="button" aria-pressed="false" title="Texto (T)" aria-label="Texto">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14M12 5v14M9 19h6"/></svg>
+        </button>
+        <button id="tool-eraser" class="tool" type="button" aria-pressed="false" title="Borracha (E)" aria-label="Borracha">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15l7-7 6 6-7 7H4v-6z"/><path d="M10 19h10"/></svg>
+        </button>
+        <button id="tool-image" class="tool" type="button" aria-pressed="false" title="Adicionar imagem (I)" aria-label="Adicionar imagem">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 15l-5-5L5 20"/></svg>
+        </button>
+      </div>
+
+      <span class="deck__sep" aria-hidden="true"></span>
+
+      <div class="deck__group deck__group--style" role="group" aria-label="Estilo do traço">
+        <label class="swatch" title="Cor do traço">
+          <input id="stroke-color" type="color" value="#5eead4" aria-label="Cor do traço">
+          <span id="stroke-swatch" aria-hidden="true"></span>
+        </label>
+        <label class="size" title="Espessura do traço">
+          <input id="stroke-size" type="range" min="1" max="24" step="1" value="3" aria-label="Espessura do traço">
+          <output id="stroke-size-out">3</output>
+        </label>
+      </div>
+
+      <span class="deck__sep" aria-hidden="true"></span>
+
+      <div class="deck__group" role="group" aria-label="Ações do canvas">
+        <button id="action-undo" class="tool" type="button" title="Desfazer (Ctrl+Z)" aria-label="Desfazer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H5v4"/><path d="M5 11a7 7 0 1 0 2-5"/></svg>
+        </button>
+        <button id="action-redo" class="tool" type="button" title="Refazer (Ctrl+Shift+Z)" aria-label="Refazer">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h4v4"/><path d="M19 11a7 7 0 1 1-2-5"/></svg>
+        </button>
+        <button id="action-grid" class="tool" type="button" aria-pressed="true" title="Mostrar ou ocultar a grade (G)" aria-label="Mostrar ou ocultar a grade">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v16H4zM4 10h16M4 16h16M10 4v16M16 4v16"/></svg>
+        </button>
+        <button id="action-clear" class="tool tool--danger" type="button" title="Limpar o canvas" aria-label="Limpar o canvas">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+        </button>
+      </div>
+
+      <div class="deck__spacer"></div>
+
+      <button id="apps-btn" class="apps-btn" type="button" aria-expanded="false" title="Todos os aplicativos" aria-label="Todos os aplicativos">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"/></svg>
+        <b id="app-count">…</b>
+      </button>
+      </div>
+    </nav>
+
+    <section id="app-drawer" hidden aria-label="Todos os aplicativos">
+      <div class="app-drawer__head">
+        <div class="app-drawer__title">Todos os aplicativos</div>
+        <input id="app-search" type="search" placeholder="Buscar aplicativo…" autocomplete="off" spellcheck="false" aria-label="Buscar aplicativo">
+        <button id="app-drawer-close" class="tool" type="button" title="Fechar aplicativos" aria-label="Fechar aplicativos">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="app-list" class="app-drawer__grid">
+        <div class="app-drawer__empty">aguardando compositor…</div>
+      </div>
+      <div id="app-drawer-summary" class="app-drawer__foot">aguardando lista…</div>
+    </section>
+  </div>
+
+  <textarea id="draw-text-editor" class="draw-text-editor" rows="1" spellcheck="false" hidden aria-label="Editar texto do canvas"></textarea>
+  <input id="image-input" type="file" accept="image/*" multiple hidden>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script type="module">
+    import init, { start } from '/pkg/spatial_deck_frontend.js';
+
+    try {
+      await init();
+      start();
+    } catch (error) {
+      console.error(error);
+      const status = document.getElementById('status');
+      if (status) status.textContent = 'falha ao carregar o WASM';
+    }
+  </script>
+</body>
+</html>

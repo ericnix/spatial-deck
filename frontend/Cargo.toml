@@ -1,0 +1,53 @@
+[package]
+name = "frontend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Frontend WebAssembly do Spatial Deck (canvas, temas e IPC)"
+
+[lib]
+name = "spatial_deck_frontend"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+common.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2.129"
+web-sys = { version = "0.3", features = [
+    "AddEventListenerOptions",
+    "Blob",
+    "CanvasRenderingContext2d",
+    "CloseEvent",
+    "CssStyleDeclaration",
+    "Document",
+    "DomRect",
+    "DomTokenList",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "FileReader",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlHeadElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
+    "Location",
+    "MessageEvent",
+    "MouseEvent",
+    "Node",
+    "NodeList",
+    "PointerEvent",
+    "Storage",
+    "WebSocket",
+    "WheelEvent",
+    "Window",
+    "console",
+] }

@@ -1,0 +1,36 @@
+[package]
+name = "compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Compositor Wayland nativo do Spatial Deck (Smithay + Tokio)"
+
+[[bin]]
+name = "spatial-deck-compositor"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+common.workspace = true
+dirs = "7"
+freedesktop_entry_parser = "2"
+futures-util.workspace = true
+serde_json.workspace = true
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "desktop",
+    "renderer_gl",
+    "wayland_frontend",
+    "xwayland",
+] }
+tokio.workspace = true
+tokio-tungstenite = "0.30"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

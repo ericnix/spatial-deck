@@ -1,6 +1,12 @@
 # build do meson
 /build/
 
+# workspace Rust
+/target/
+
+# saída do wasm-pack / wasm-bindgen
+/web/pkg/
+
 # binários compilados (make)
 padrao-compositor
 padrao-host
