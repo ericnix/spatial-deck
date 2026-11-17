@@ -1797,7 +1797,17 @@ impl App {
             | IpcMessage::SaveRegion { .. }
             | IpcMessage::RegionSaved { .. }
             | IpcMessage::GotoRegion { .. }
-            | IpcMessage::DeleteRegion { .. } => {
+            | IpcMessage::DeleteRegion { .. }
+            | IpcMessage::TrayUpdate { .. }
+            | IpcMessage::TrayActivate { .. }
+            | IpcMessage::TraySecondaryActivate { .. }
+            | IpcMessage::TrayMenuRequest { .. }
+            | IpcMessage::TrayRequest
+            | IpcMessage::TrayMenu { .. }
+            | IpcMessage::TrayMenuEvent { .. }
+            | IpcMessage::MediaState { .. }
+            | IpcMessage::MediaCommand { .. }
+            | IpcMessage::MediaRequest => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.

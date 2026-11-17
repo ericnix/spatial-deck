@@ -99,6 +99,15 @@ screen_y = world_y * scale + offset_y</pre>
           <div id="calendar-grid" class="calendar__grid"></div>
         </div>
       </div>
+
+      <div id="bar-mod-media" class="bar__module bar-media">
+        <div id="media-body" class="media" hidden>
+          <button id="media-prev" class="media-btn" type="button" aria-label="Faixa anterior" title="Anterior">‹‹</button>
+          <button id="media-play" class="media-btn" type="button" aria-label="Reproduzir ou pausar" title="Reproduzir/pausar">▶</button>
+          <button id="media-next" class="media-btn" type="button" aria-label="Próxima faixa" title="Próxima">››</button>
+          <span class="media__text"><b id="media-title"></b><span id="media-artist"></span></span>
+        </div>
+      </div>
     </div>
 
     <div id="bar-right" class="bar__group bar__group--end">
@@ -125,6 +134,11 @@ screen_y = world_y * scale + offset_y</pre>
           <button id="zoom-reset" class="zoom-btn zoom-btn--text" type="button" title="Voltar para 100% (Ctrl+0)">1:1</button>
           <button id="zoom-fit" class="zoom-btn zoom-btn--text" type="button" title="Enquadrar tudo (Ctrl+Shift+F)">Ajustar</button>
         </div>
+      </div>
+
+      <div id="bar-mod-tray" class="bar__module bar-tray">
+        <div id="tray-items" class="tray-items" role="group" aria-label="Bandeja do sistema"></div>
+        <div id="tray-menu" class="bar-popover bar-popover--left bar-tray-menu" hidden></div>
       </div>
 
       <div id="bar-mod-notifications" class="bar__module">

@@ -174,6 +174,31 @@ ficar oculto, e as setas ↑/↓ mudam a ordem dentro do grupo. A escolha fica e
 Módulos ocultos continuam existindo no DOM (só perdem o espaço na barra);
 todos os atalhos e funcionalidades seguem valendo.
 
+### Bandeja e mídia
+
+Dois módulos adicionais na barra:
+
+- **Bandeja (SNI)**: ícones dos `org.kde.StatusNotifierItem`. Clique esquerdo
+  chama `Activate` (ou abre o menu quando `ItemIsMenu`), clique direito busca
+  o menu dbusmenu (`GetLayout`) e mostra os itens; clicar num item chama
+  `Event(id, "clicked")`. Ícones vêm de `/icon/<nome>`; quando o app não tem
+  `IconName`, aparece a inicial do título.
+- **Mídia (MPRIS)**: player ativo com título/artista, botões anterior,
+  reproduzir/pausar e próximo. O estado é consultado a cada 1 s e os botões
+  chamam `PlayPause`, `Next` e `Previous`.
+
+O watcher da bandeja funciona em dois modos: se `org.kde.StatusNotifierWatcher`
+estiver livre (sessão isolada), o próprio `shell-services` implementa o
+protocolo; se já existir um (KDE/GNOME), ele se registra como host e consome a
+lista existente, sem disputar o nome. Por isso, numa sessão compartilhada, a
+bandeja do deck mostra os mesmos itens do painel do host.
+
+Mensagens IPC: `tray_update`, `tray_activate`, `tray_secondary_activate`,
+`tray_request`, `tray_menu_request`, `tray_menu`, `tray_menu_event`,
+`media_state`, `media_command` e `media_request`. O frontend pede o estado
+atual ao abrir a página (`tray_request`/`media_request`), porque o primeiro
+`tray_update` pode chegar antes do WebSocket.
+
 ### Regiões do canvas
 
 No lugar de workspaces, o desktop usa **regiões**: enquadramentos nomeados com

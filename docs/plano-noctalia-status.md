@@ -187,6 +187,53 @@ Entregue no compositor Rust (Smithay 0.7):
 - Regiões não são sincronizadas entre duas instâncias do frontend além do
   broadcast normal.
 
+## Etapa 5 — Bandeja (SNI) e mídia (MPRIS) — CONCLUÍDA
+
+- `shell-services` ganhou `tray.rs` e `media.rs`.
+- Bandeja: watcher próprio quando o nome está livre; caso contrário host do
+  watcher da sessão (`RegisterStatusNotifierHost` + leitura de
+  `RegisteredStatusNotifierItems`), sem disputar o nome.
+- Itens consultados a cada 2 s (título, ícone, status, menu, `ItemIsMenu`) com
+  timeout de 900 ms por item — um item morto não trava a lista.
+- Menu dbusmenu: `AboutToShow` + `GetLayout` com layout tipado recursivo
+  (`(ia{sv}av)` → `MenuLayout`), renderizado com submenus e separadores;
+  clique chama `Event(id, "clicked")`. `Activate`/`SecondaryActivate` chamam o
+  item com timeout.
+- MPRIS: descoberta por `ListNames`, player com `Playing` preferido;
+  `Metadata` (título, artistas; fallback para o nome do arquivo em
+  `xesam:url`), `PlaybackStatus`, `CanGoNext/Previous`; comandos
+  `PlayPause`/`Next`/`Previous`.
+- IPC: `tray_update`, `tray_activate`, `tray_secondary_activate`,
+  `tray_request`, `tray_menu_request`, `tray_menu`, `tray_menu_event`,
+  `media_state`, `media_command`, `media_request` + testes.
+- Frontend: módulos Bandeja e Mídia (novos na config da barra), ícones com
+  fallback pela inicial, menu popover, botões de mídia e esmaecimento quando
+  o player não suporta anterior/próximo.
+
+### Evidências de teste (17/11/2026)
+
+- `cargo test --workspace` verde (22 + 20 + 20).
+- Bandeja: 3 itens reais do barramento apareceram na barra; menu do
+  `xwaylandvideobridge` (`Reset Bridge`, `Quit`) renderizado via
+  `tray_menu_request`; `tray_activate` em "Easy Effects" sem erro.
+- Mídia: `cvlc --intf dummy --no-video` → módulo mostrou `my_video-1` e botão
+  de pausa; `media_command play_pause` pausou o VLC e o botão virou play;
+  ao fechar o VLC o módulo desapareceu sozinho.
+- Primeiro `tray_update` chegava antes do WebSocket: resolvido com
+  `tray_request`/`media_request` no `onopen`.
+- Item morto no barramento travava o polling: resolvido com timeout por item.
+
+### Limitações
+
+- `IconPixmap` não é decodificado (usa `IconName`/`/icon/<nome>` ou a inicial).
+- Menu: lê `GetLayout` inteiro, mas só interpreta `label`, `enabled`,
+  `visible` e `type=separator`; estados de toggle e ícones de item não são
+  mostrados.
+- Em sessão compartilhada a bandeja mostra os itens do host (não só os do
+  deck); é o comportamento esperado de um host do watcher.
+- `ItemIsMenu` abre o menu no clique esquerdo; não há tooltip próprio
+  (`ToolTip` do SNI ignorado).
+
 ## Próxima etapa
 
-Etapa 5 — tray (SNI) e mídia (MPRIS). Nada iniciado.
+Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.

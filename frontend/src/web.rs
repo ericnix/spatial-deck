@@ -17,8 +17,8 @@ use std::{
 
 use common::{
     fuzzy_score, push_recent, toggle_favorite, CanvasRegion, CanvasTheme, CanvasZoom, ChromeRect,
-    ClusterPlacement, DesktopApp, IpcMessage, NotificationButton, NotificationItem,
-    NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
+    ClusterPlacement, DesktopApp, IpcMessage, MediaAction, NotificationButton, NotificationItem,
+    TrayItem, TrayMenuEntry, NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
@@ -41,12 +41,14 @@ const HISTORY_LIMIT: usize = 100;
 const BAR_KEY: &str = "spatial-deck.bar";
 
 /// Módulos da barra: id, rótulo e slot padrão.
-const BAR_MODULES: [(&str, &str, &str); 7] = [
+const BAR_MODULES: [(&str, &str, &str); 9] = [
     ("regions", "Regiões", "left"),
     ("clock", "Relógio", "center"),
+    ("media", "Mídia", "center"),
     ("status", "Status", "left"),
     ("themes", "Temas", "right"),
     ("zoom", "Zoom", "right"),
+    ("tray", "Bandeja", "right"),
     ("notifications", "Notificações", "right"),
     ("overview", "Visão geral", "right"),
 ];
@@ -192,6 +194,17 @@ struct State {
     /// Mês exibido no calendário (0-11) e ano.
     calendar_year: i32,
     calendar_month: u32,
+    /// Itens da bandeja (StatusNotifierItem).
+    tray_items: Vec<TrayItem>,
+    /// Item cujo menu de contexto está aberto.
+    tray_menu_owner: Option<String>,
+    /// Estado do player MPRIS ativo (vazio quando não há player).
+    media_player: String,
+    media_title: String,
+    media_artist: String,
+    media_status: String,
+    media_can_next: bool,
+    media_can_prev: bool,
 }
 
 impl Default for State {
@@ -226,6 +239,14 @@ impl Default for State {
             anim: None,
             calendar_year: 0,
             calendar_month: 0,
+            tray_items: Vec::new(),
+            tray_menu_owner: None,
+            media_player: String::new(),
+            media_title: String::new(),
+            media_artist: String::new(),
+            media_status: String::new(),
+            media_can_next: false,
+            media_can_prev: false,
         }
     }
 }
@@ -255,6 +276,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_cards(&document)?;
     setup_deck_apps(&window, &document)?;
     setup_notifications(&window, &document)?;
+    setup_tray_media(&document)?;
     drawing::init(&document)?;
     connect_websocket();
 
@@ -1417,6 +1439,8 @@ fn connect_websocket() {
         send_theme();
         send_message(&IpcMessage::NotificationHistoryRequest);
         send_message(&IpcMessage::RegionListRequest);
+        send_message(&IpcMessage::TrayRequest);
+        send_message(&IpcMessage::MediaRequest);
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             send_chrome_rects(&document);
         }
@@ -1527,6 +1551,7 @@ fn send_chrome_rects(document: &Document) {
         "calendar-popover",
         "theme-popover",
         "bar-settings-panel",
+        "tray-menu",
     ] {
         let Some(element) = document.get_element_by_id(id) else {
             continue;
@@ -1744,6 +1769,39 @@ fn handle_server_message(text: &str) {
             // anima até a região; o compositor acompanha o CanvasTransform.
             goto_region(id);
         }
+        IpcMessage::TrayUpdate { items } => {
+            STATE.with(|state| state.borrow_mut().tray_items = items);
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_tray(&document);
+            }
+        }
+        IpcMessage::TrayMenu { id, items } => {
+            STATE.with(|state| state.borrow_mut().tray_menu_owner = Some(id));
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                show_tray_menu(&document, &items);
+            }
+        }
+        IpcMessage::MediaState {
+            player,
+            title,
+            artist,
+            status,
+            can_next,
+            can_prev,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.media_player = player;
+                state.media_title = title;
+                state.media_artist = artist;
+                state.media_status = status;
+                state.media_can_next = can_next;
+                state.media_can_prev = can_prev;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_media(&document);
+            }
+        }
         IpcMessage::DndState { active } => {
             STATE.with(|state| state.borrow_mut().dnd = active);
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
@@ -1756,7 +1814,14 @@ fn handle_server_message(text: &str) {
         | IpcMessage::NotificationHistoryRequest
         | IpcMessage::RegionListRequest
         | IpcMessage::SaveRegion { .. }
-        | IpcMessage::DeleteRegion { .. } => {}
+        | IpcMessage::DeleteRegion { .. }
+        | IpcMessage::TrayActivate { .. }
+        | IpcMessage::TraySecondaryActivate { .. }
+        | IpcMessage::TrayMenuRequest { .. }
+        | IpcMessage::TrayRequest
+        | IpcMessage::TrayMenuEvent { .. }
+        | IpcMessage::MediaCommand { .. }
+        | IpcMessage::MediaRequest => {}
         _ => {}
     }
 }
@@ -3009,6 +3074,289 @@ fn start_animation_ticker() {
         );
     }
     callback.forget();
+}
+
+
+// ---------------------------------------------------------------------------
+// Bandeja do sistema (SNI) e mídia (MPRIS)
+// ---------------------------------------------------------------------------
+
+fn setup_tray_media(document: &Document) -> Result<(), JsValue> {
+    if let Ok(container) = by_id(document, "tray-items") {
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-tray-id]") else {
+                return;
+            };
+            if let Some(id) = button.get_attribute("data-tray-id") {
+                send_message(&IpcMessage::TrayActivate { id });
+            }
+        });
+        container.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+
+        let context = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-tray-id]") else {
+                return;
+            };
+            event.prevent_default();
+            if let Some(id) = button.get_attribute("data-tray-id") {
+                send_message(&IpcMessage::TrayMenuRequest { id });
+            }
+        });
+        container
+            .add_event_listener_with_callback("contextmenu", context.as_ref().unchecked_ref())?;
+        context.forget();
+    }
+
+    if let Ok(menu) = by_id(document, "tray-menu") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-tray-menu-id]") else {
+                return;
+            };
+            let Some(event_id) = button
+                .get_attribute("data-tray-menu-id")
+                .and_then(|value| value.parse::<i32>().ok())
+            else {
+                return;
+            };
+            let owner = STATE.with(|state| state.borrow().tray_menu_owner.clone());
+            if let Some(owner) = owner {
+                send_message(&IpcMessage::TrayMenuEvent {
+                    id: owner,
+                    event_id,
+                });
+            }
+            hide_tray_menu(&document_for_click);
+        });
+        menu.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    for (id, action) in [
+        ("media-prev", MediaAction::Previous),
+        ("media-play", MediaAction::PlayPause),
+        ("media-next", MediaAction::Next),
+    ] {
+        let Ok(button) = by_id(document, id) else {
+            continue;
+        };
+        let click = Closure::<dyn FnMut()>::new(move || {
+            send_message(&IpcMessage::MediaCommand { command: action });
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Clique fora fecha o menu da bandeja.
+    let document_for_outside = document.clone();
+    let outside = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if target
+            .closest("#tray-menu, #tray-items")
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        hide_tray_menu(&document_for_outside);
+    });
+    document.add_event_listener_with_callback("pointerdown", outside.as_ref().unchecked_ref())?;
+    outside.forget();
+
+    Ok(())
+}
+
+fn render_tray(document: &Document) {
+    let items = STATE.with(|state| state.borrow().tray_items.clone());
+    let html = items.iter().map(tray_item_html).collect::<String>();
+    if let Ok(container) = by_id(document, "tray-items") {
+        container.set_inner_html(&html);
+    }
+
+    let owner = STATE.with(|state| state.borrow().tray_menu_owner.clone());
+    if let Some(owner) = owner {
+        if !items.iter().any(|item| item.id == owner) {
+            hide_tray_menu(document);
+        }
+    }
+    send_chrome_rects(document);
+}
+
+fn tray_item_html(item: &TrayItem) -> String {
+    let initial = item
+        .title
+        .chars()
+        .find(|character| !character.is_whitespace())
+        .map(|character| character.to_uppercase().collect::<String>())
+        .unwrap_or_else(|| "•".to_owned());
+    let icon = if item.icon_name.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<img src=\"/icon/{}\" alt=\"\" onerror=\"this.style.display='none';this.nextElementSibling.style.display='grid'\">",
+            percent_encode(&item.icon_name)
+        )
+    };
+    format!(
+        "<button class=\"tray-item\" type=\"button\" data-tray-id=\"{id}\" data-status=\"{status}\" title=\"{title}\">{icon}\
+         <span class=\"tray-item__fallback\"{fallback_style}>{initial}</span></button>",
+        id = escape_html(&item.id),
+        status = escape_html(&item.status),
+        title = escape_html(&item.title),
+        initial = escape_html(&initial),
+        fallback_style = if item.icon_name.is_empty() {
+            ""
+        } else {
+            " style=\"display:none\""
+        },
+    )
+}
+
+fn show_tray_menu(document: &Document, items: &[TrayMenuEntry]) {
+    let Some(menu) = document.get_element_by_id("tray-menu") else {
+        return;
+    };
+    let html = if items.is_empty() {
+        "<p class=\"notification-empty\">Este item não expõe menu.</p>".to_owned()
+    } else {
+        format!(
+            "<ul class=\"tray-menu__list\">{}</ul>",
+            menu_entries_html(items)
+        )
+    };
+    let _ = menu.set_inner_html(&html);
+    let _ = menu.remove_attribute("hidden");
+    send_chrome_rects(document);
+}
+
+fn hide_tray_menu(document: &Document) {
+    let Some(menu) = document.get_element_by_id("tray-menu") else {
+        return;
+    };
+    if menu.has_attribute("hidden") {
+        return;
+    }
+    let _ = menu.set_attribute("hidden", "");
+    STATE.with(|state| state.borrow_mut().tray_menu_owner = None);
+    send_chrome_rects(document);
+}
+
+fn menu_entries_html(entries: &[TrayMenuEntry]) -> String {
+    entries
+        .iter()
+        .filter(|entry| entry.visible)
+        .map(|entry| {
+            if entry.is_separator {
+                return "<li class=\"tray-menu__sep\"></li>".to_owned();
+            }
+            let label = escape_html(&strip_mnemonic(&entry.label));
+            if entry.children.is_empty() {
+                format!(
+                    "<li><button type=\"button\" class=\"tray-menu__item\" data-tray-menu-id=\"{id}\"{disabled}>{label}</button></li>",
+                    id = entry.id,
+                    disabled = if entry.enabled { "" } else { " disabled" },
+                )
+            } else {
+                format!(
+                    "<li><span class=\"tray-menu__label\">{label}</span>\
+                     <ul class=\"tray-menu__list tray-menu__children\">{children}</ul></li>",
+                    children = menu_entries_html(&entry.children),
+                )
+            }
+        })
+        .collect()
+}
+
+/// Remove mnemônicos de GTK (`_Abrir`) e Qt (`&Abrir`).
+fn strip_mnemonic(label: &str) -> String {
+    let mut output = String::with_capacity(label.len());
+    let mut characters = label.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '_' => {}
+            '&' => {
+                if characters.peek() == Some(&'&') {
+                    output.push('&');
+                    characters.next();
+                }
+            }
+            _ => output.push(character),
+        }
+    }
+    output
+}
+
+fn render_media(document: &Document) {
+    let (player, title, artist, status, can_next, can_prev) = STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.media_player.clone(),
+            state.media_title.clone(),
+            state.media_artist.clone(),
+            state.media_status.clone(),
+            state.media_can_next,
+            state.media_can_prev,
+        )
+    });
+
+    let Some(body) = document.get_element_by_id("media-body") else {
+        return;
+    };
+    if player.is_empty() {
+        let _ = body.set_attribute("hidden", "");
+        return;
+    }
+    let _ = body.remove_attribute("hidden");
+    let _ = body.set_attribute("title", &player);
+
+    if let Some(element) = document.get_element_by_id("media-title") {
+        let text = if title.is_empty() {
+            "Sem título".to_owned()
+        } else {
+            title
+        };
+        let _ = element.set_text_content(Some(&text));
+    }
+    if let Some(element) = document.get_element_by_id("media-artist") {
+        let _ = element.set_text_content(Some(&artist));
+    }
+    if let Ok(button) = by_id(document, "media-play") {
+        let _ = button.set_text_content(Some(if status == "Playing" { "||" } else { "▶" }));
+    }
+    for (id, enabled) in [("media-prev", can_prev), ("media-next", can_next)] {
+        if let Ok(button) = by_id(document, id) {
+            if enabled {
+                let _ = button.remove_attribute("disabled");
+            } else {
+                let _ = button.set_attribute("disabled", "");
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -148,6 +148,78 @@ pub enum IpcMessage {
 
     /// Remove uma região persistida.
     DeleteRegion { id: u32 },
+
+    /// Itens da bandeja (StatusNotifierItem) após uma mudança.
+    TrayUpdate { items: Vec<TrayItem> },
+
+    /// Clique esquerdo num item da bandeja.
+    TrayActivate { id: String },
+
+    /// Clique do meio num item (SecondaryActivate).
+    TraySecondaryActivate { id: String },
+
+    /// Pedido do menu de contexto de um item.
+    TrayMenuRequest { id: String },
+
+    /// Pedido do shell para receber o estado atual da bandeja.
+    TrayRequest,
+
+    /// Layout do menu de um item (dbusmenu GetLayout).
+    TrayMenu { id: String, items: Vec<TrayMenuEntry> },
+
+    /// Clique num item do menu (dbusmenu Event).
+    TrayMenuEvent { id: String, event_id: i32 },
+
+    /// Estado do player MPRIS ativo (vazio quando não há player).
+    MediaState {
+        player: String,
+        title: String,
+        artist: String,
+        status: String,
+        can_next: bool,
+        can_prev: bool,
+    },
+
+    /// Comando para o player MPRIS ativo.
+    MediaCommand { command: MediaAction },
+
+    /// Pedido do shell para receber o estado atual do player.
+    MediaRequest,
+}
+
+/// Item da bandeja do sistema (StatusNotifierItem).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrayItem {
+    /// Identificador estável: `serviço/caminho` do item no barramento.
+    pub id: String,
+    pub title: String,
+    pub icon_name: String,
+    /// `Passive`, `Active` ou `NeedsAttention`.
+    pub status: String,
+    pub has_menu: bool,
+    /// `true` quando o clique esquerdo deve abrir o menu.
+    pub item_is_menu: bool,
+}
+
+/// Entrada do menu de contexto de um item (dbusmenu).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrayMenuEntry {
+    pub id: i32,
+    pub label: String,
+    pub enabled: bool,
+    pub visible: bool,
+    pub is_separator: bool,
+    #[serde(default)]
+    pub children: Vec<TrayMenuEntry>,
+}
+
+/// Comandos aceitos pelo player MPRIS ativo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaAction {
+    PlayPause,
+    Next,
+    Previous,
 }
 
 /// Ações de zoom pedidas pelo compositor ao frontend.
@@ -658,6 +730,105 @@ mod tests {
         let json = delete.to_json().unwrap();
         assert!(json.contains("\"type\":\"delete_region\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), delete);
+    }
+
+    #[test]
+    fn tray_messages_round_trip() {
+        let item = TrayItem {
+            id: ":1.89/StatusNotifierItem".into(),
+            title: "Ponte de vídeo".into(),
+            icon_name: "org.kde.xwaylandvideobridge".into(),
+            status: "Active".into(),
+            has_menu: true,
+            item_is_menu: false,
+        };
+        let update = IpcMessage::TrayUpdate {
+            items: vec![item.clone()],
+        };
+        let json = update.to_json().unwrap();
+        assert!(json.contains("\"type\":\"tray_update\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), update);
+
+        let activate = IpcMessage::TrayActivate {
+            id: item.id.clone(),
+        };
+        let json = activate.to_json().unwrap();
+        assert!(json.contains("\"type\":\"tray_activate\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), activate);
+
+        let menu = IpcMessage::TrayMenu {
+            id: item.id.clone(),
+            items: vec![TrayMenuEntry {
+                id: 3,
+                label: "Abrir".into(),
+                enabled: true,
+                visible: true,
+                is_separator: false,
+                children: vec![TrayMenuEntry {
+                    id: 4,
+                    label: "Preferências".into(),
+                    enabled: false,
+                    visible: true,
+                    is_separator: false,
+                    children: Vec::new(),
+                }],
+            }],
+        };
+        let json = menu.to_json().unwrap();
+        assert!(json.contains("\"type\":\"tray_menu\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), menu);
+
+        let event = IpcMessage::TrayMenuEvent {
+            id: item.id,
+            event_id: 3,
+        };
+        let json = event.to_json().unwrap();
+        assert!(json.contains("\"type\":\"tray_menu_event\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), event);
+
+        let request = IpcMessage::TrayMenuRequest {
+            id: "x".into(),
+        };
+        assert_eq!(
+            IpcMessage::from_json(&request.to_json().unwrap()).unwrap(),
+            request
+        );
+
+        let refresh = IpcMessage::TrayRequest;
+        let json = refresh.to_json().unwrap();
+        assert!(json.contains("\"type\":\"tray_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), refresh);
+    }
+
+    #[test]
+    fn media_messages_round_trip() {
+        let state = IpcMessage::MediaState {
+            player: "org.mpris.MediaPlayer2.vlc".into(),
+            title: "Faixa".into(),
+            artist: "Artista".into(),
+            status: "Playing".into(),
+            can_next: true,
+            can_prev: false,
+        };
+        let json = state.to_json().unwrap();
+        assert!(json.contains("\"type\":\"media_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), state);
+
+        for (action, name) in [
+            (MediaAction::PlayPause, "play_pause"),
+            (MediaAction::Next, "next"),
+            (MediaAction::Previous, "previous"),
+        ] {
+            let command = IpcMessage::MediaCommand { command: action };
+            let json = command.to_json().unwrap();
+            assert!(json.contains(&format!("\"command\":\"{name}\"")));
+            assert_eq!(IpcMessage::from_json(&json).unwrap(), command);
+        }
+
+        let refresh = IpcMessage::MediaRequest;
+        let json = refresh.to_json().unwrap();
+        assert!(json.contains("\"type\":\"media_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), refresh);
     }
 
     #[test]

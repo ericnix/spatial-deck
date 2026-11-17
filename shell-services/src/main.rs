@@ -10,8 +10,10 @@
 
 mod dbus;
 mod ipc;
+mod media;
 mod regions;
 mod store;
+mod tray;
 
 use std::{
     sync::Arc,
@@ -56,6 +58,23 @@ async fn main() -> anyhow::Result<()> {
         interface.signal_emitter().clone().into_owned()
     };
 
+    let (tray_tx, tray_rx) = mpsc::channel(16);
+    let (media_tx, media_rx) = mpsc::channel(16);
+    {
+        let connection = connection.clone();
+        let ipc = ipc_tx.clone();
+        tokio::spawn(async move {
+            tray::start(connection, ipc, tray_rx).await;
+        });
+    }
+    {
+        let connection = connection.clone();
+        let ipc = ipc_tx.clone();
+        tokio::spawn(async move {
+            media::run(connection, ipc, media_rx).await;
+        });
+    }
+
     info!("shell-services pronto");
 
     // Notificações com prazo são fechadas num tick único, sem uma task por
@@ -67,7 +86,16 @@ async fn main() -> anyhow::Result<()> {
                 let Some(message) = message else {
                     break;
                 };
-                handle(message, &store, &regions, &ipc_tx, &emitter).await;
+                handle(
+                    message,
+                    &store,
+                    &regions,
+                    &ipc_tx,
+                    &emitter,
+                    &tray_tx,
+                    &media_tx,
+                )
+                .await;
             }
             _ = ticker.tick() => {
                 let expired = store.lock().await.expire_due(Instant::now());
@@ -92,12 +120,15 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle(
     message: IpcMessage,
     store: &Arc<Mutex<Store>>,
     regions: &Arc<Mutex<RegionStore>>,
     ipc: &mpsc::Sender<IpcMessage>,
     emitter: &SignalEmitter<'static>,
+    tray: &mpsc::Sender<tray::TrayCommand>,
+    media: &mpsc::Sender<media::MediaCommand>,
 ) {
     match message {
         // O compositor manda AppList ao aceitar a conexão; o pedido explícito
@@ -132,6 +163,34 @@ async fn handle(
         }
         IpcMessage::GotoRegion { .. } => {
             // O frontend anima a transformação; o daemon só mantém a lista.
+        }
+        IpcMessage::TrayActivate { id } => {
+            let _ = tray.send(tray::TrayCommand::Activate(id)).await;
+        }
+        IpcMessage::TraySecondaryActivate { id } => {
+            let _ = tray.send(tray::TrayCommand::SecondaryActivate(id)).await;
+        }
+        IpcMessage::TrayMenuRequest { id } => {
+            let _ = tray.send(tray::TrayCommand::Menu(id)).await;
+        }
+        IpcMessage::TrayRequest => {
+            let _ = tray.send(tray::TrayCommand::Refresh).await;
+        }
+        IpcMessage::TrayMenuEvent { id, event_id } => {
+            let _ = tray
+                .send(tray::TrayCommand::MenuEvent { id, event_id })
+                .await;
+        }
+        IpcMessage::MediaCommand { command } => {
+            let _ = media.send(media::MediaCommand::Action(command)).await;
+        }
+        IpcMessage::MediaRequest => {
+            let _ = media.send(media::MediaCommand::Refresh).await;
+        }
+        IpcMessage::TrayUpdate { .. }
+        | IpcMessage::TrayMenu { .. }
+        | IpcMessage::MediaState { .. } => {
+            // Mensagens produzidas pelos próprios serviços.
         }
         IpcMessage::DndState { active } => {
             store.lock().await.set_dnd(active);
