@@ -372,10 +372,14 @@ O botão de **nota** no deck cria um cartão estilizado no centro da vista (com
 cascata para notas novas). O corpo é um `<textarea>` com o mesmo visual dos
 cartões; a barra de título permite arrastar a nota pelo canvas e o `×` remove.
 
-As notas são salvas em `localStorage` (`spatial-deck.notes`) com posição e
-texto, e recarregadas ao abrir o desktop. Como são cartões do shell, ficam
-abaixo das janelas reais (como os cartões de demonstração); o texto não passa
-pelo compositor.
+A nota tem quatro **alças nos cantos** para redimensionar (mínimo 240×170) e um
+botão redondo na barra que alterna a cor entre **padrão, amarelo, verde, azul e
+rosa** — o texto se adapta ao contraste de cada cor.
+
+As notas são salvas em `localStorage` (`spatial-deck.notes`) com posição,
+tamanho, cor e texto, e recarregadas ao abrir o desktop. Como são cartões do
+shell, ficam abaixo das janelas reais (como os cartões de demonstração); o
+texto não passa pelo compositor.
 
 ### Camadas de janelas e imagens
 

@@ -305,6 +305,18 @@ transparência mostra o canvas (não a janela atrás).
 - Validado: nota criada, texto exibido, arrastada (estado) e recarregada após
   reiniciar o desktop sem o gancho de teste.
 
+## Ajuste — nota redimensionável e colorida — CONCLUÍDO
+
+- Quatro alças por nota (cantos), com redimensionamento livre em coordenadas
+  de mundo (mínimo 240×170), estado sincronizado com `STATE.cards` e
+  persistido ao soltar.
+- Botão de cor na barra da nota alterna entre padrão, amarelo, verde, azul e
+  rosa; o texto e os detalhes da barra mudam para manter contraste.
+- Cor salva em `spatial-deck.notes` (campo `color`, com default para notas
+  antigas).
+- Validado visualmente: nota amarela com alças nos quatro cantos e botão de
+  cor.
+
 ## Próxima etapa
 
 Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.

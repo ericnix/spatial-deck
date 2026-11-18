@@ -154,6 +154,26 @@ struct NoteData {
     h: f64,
     #[serde(default)]
     text: String,
+    #[serde(default = "default_note_color")]
+    color: String,
+}
+
+fn default_note_color() -> String {
+    "default".to_owned()
+}
+
+/// Redimensionamento de nota em andamento.
+struct NoteResize {
+    id: u32,
+    west: bool,
+    north: bool,
+    start_x: f64,
+    start_y: f64,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    scale: f64,
 }
 
 /// Popup visível de uma notificação, com o prazo individual.
@@ -273,6 +293,7 @@ thread_local! {
     static SOCKET: RefCell<Option<WebSocket>> = const { RefCell::new(None) };
     static TOAST_GENERATION: Cell<u32> = const { Cell::new(0) };
     static LAST_CHROME: Cell<f64> = const { Cell::new(0.0) };
+    static NOTE_RESIZE: RefCell<Option<NoteResize>> = const { RefCell::new(None) };
 }
 
 #[wasm_bindgen]
@@ -3544,6 +3565,7 @@ fn create_note(document: &Document) {
         w: NOTE_W,
         h: NOTE_H,
         text: String::new(),
+        color: default_note_color(),
     };
     if spawn_note(document, note).is_ok() {
         save_notes(document);
@@ -3558,6 +3580,7 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
     article.set_class_name("window-card note-card");
     article.set_attribute("data-window-id", &note.id.to_string())?;
     article.set_attribute("data-note", "1")?;
+    article.set_attribute("data-color", &note.color)?;
     article.set_attribute(
         "style",
         &format!(
@@ -3568,10 +3591,15 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
     article.set_inner_html(&format!(
         "<div class=\"window-card__bar\"><span class=\"dots\"><i></i><i></i><i></i></span>\
          <b>nota</b><span class=\"window-card__id\">{}</span>\
+         <button class=\"window-card__color\" type=\"button\" data-note-color title=\"Cor da nota\" aria-label=\"Cor da nota\"></button>\
          <button class=\"window-card__close\" type=\"button\" aria-label=\"Fechar nota\">×</button>\
          </div><div class=\"window-card__body note-card__body\">\
          <textarea class=\"note-input\" data-note-input placeholder=\"Escreva uma nota…\" spellcheck=\"false\"></textarea>\
-         </div>",
+         </div>\
+         <div class=\"note-handle note-handle--nw\" data-note-resize=\"nw\"></div>\
+         <div class=\"note-handle note-handle--ne\" data-note-resize=\"ne\"></div>\
+         <div class=\"note-handle note-handle--sw\" data-note-resize=\"sw\"></div>\
+         <div class=\"note-handle note-handle--se\" data-note-resize=\"se\"></div>",
         note.id
     ));
     world.append_child(&article)?;
@@ -3588,6 +3616,7 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
     });
 
     bind_card(document, note.id)?;
+    bind_note_controls(document, note.id, &article)?;
 
     if let Ok(Some(node)) = article.query_selector("[data-note-input]") {
         if let Ok(input) = node.dyn_into::<HtmlTextAreaElement>() {
@@ -3598,6 +3627,182 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
             });
             input.add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref())?;
             on_input.forget();
+        }
+    }
+    Ok(())
+}
+
+
+const NOTE_COLORS: [&str; 5] = ["default", "yellow", "green", "blue", "pink"];
+
+/// Liga o botão de cor e as alças de redimensionamento de uma nota.
+fn bind_note_controls(
+    document: &Document,
+    card_id: u32,
+    article: &Element,
+) -> Result<(), JsValue> {
+    if let Ok(Some(button)) = article.query_selector("[data-note-color]") {
+        let document_for_click = document.clone();
+        let article_for_click = article.clone();
+        let pointer = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            event.stop_propagation();
+            event.prevent_default();
+            let current = article_for_click
+                .get_attribute("data-color")
+                .unwrap_or_else(default_note_color);
+            let index = NOTE_COLORS
+                .iter()
+                .position(|color| *color == current)
+                .unwrap_or(0);
+            let next = NOTE_COLORS[(index + 1) % NOTE_COLORS.len()];
+            let _ = article_for_click.set_attribute("data-color", next);
+            save_notes(&document_for_click);
+        });
+        button.add_event_listener_with_callback("pointerdown", pointer.as_ref().unchecked_ref())?;
+        pointer.forget();
+    }
+
+    if let Ok(handles) = article.query_selector_all("[data-note-resize]") {
+        for index in 0..handles.length() {
+            let Some(node) = handles.item(index) else {
+                continue;
+            };
+            let Ok(handle) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            let corner = handle
+                .get_attribute("data-note-resize")
+                .unwrap_or_default();
+            let west = corner.contains('w');
+            let north = corner.contains('n');
+
+            let document_for_down = document.clone();
+            let handle_for_down = handle.clone();
+            let article_for_down = article.clone();
+            let pointer_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+                if event.button() != 0 {
+                    return;
+                }
+                event.stop_propagation();
+                event.prevent_default();
+                let geometry = STATE.with(|state| {
+                    state
+                        .borrow()
+                        .cards
+                        .iter()
+                        .find(|card| card.id == card_id)
+                        .map(|card| (card.x, card.y, card.w, card.h))
+                });
+                let Some((x, y, w, h)) = geometry else {
+                    return;
+                };
+                let scale = STATE.with(|state| state.borrow().scale.max(0.01));
+                NOTE_RESIZE.with(|slot| {
+                    *slot.borrow_mut() = Some(NoteResize {
+                        id: card_id,
+                        west,
+                        north,
+                        start_x: event.client_x() as f64,
+                        start_y: event.client_y() as f64,
+                        x,
+                        y,
+                        w,
+                        h,
+                        scale,
+                    });
+                });
+                let _ = handle_for_down.set_pointer_capture(event.pointer_id());
+                let _ = article_for_down.class_list().add_1("is-resizing");
+            });
+            handle.add_event_listener_with_callback(
+                "pointerdown",
+                pointer_down.as_ref().unchecked_ref(),
+            )?;
+            pointer_down.forget();
+
+            let document_for_move = document.clone();
+            let article_for_move = article.clone();
+            let pointer_move = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+                let Some(active) = NOTE_RESIZE.with(|slot| slot.borrow().as_ref().map(|state| {
+                    (
+                        state.id == card_id,
+                        state.west,
+                        state.north,
+                        state.start_x,
+                        state.start_y,
+                        state.x,
+                        state.y,
+                        state.w,
+                        state.h,
+                        state.scale,
+                    )
+                })) else {
+                    return;
+                };
+                if !active.0 {
+                    return;
+                }
+                let (_, west, north, start_x, start_y, x0, y0, w0, h0, scale) = active;
+                let dx = (event.client_x() as f64 - start_x) / scale;
+                let dy = (event.client_y() as f64 - start_y) / scale;
+                let w = (w0 + if west { -dx } else { dx }).clamp(240.0, 4_000.0);
+                let h = (h0 + if north { -dy } else { dy }).clamp(170.0, 4_000.0);
+                let x = if west { x0 + w0 - w } else { x0 };
+                let y = if north { y0 + h0 - h } else { y0 };
+
+                let _ = article_for_move.set_attribute(
+                    "style",
+                    &format!("left:{x}px;top:{y}px;width:{w}px;height:{h}px"),
+                );
+                STATE.with(|state| {
+                    let mut state = state.borrow_mut();
+                    if let Some(card) = state.cards.iter_mut().find(|card| card.id == card_id) {
+                        card.x = x;
+                        card.y = y;
+                        card.w = w;
+                        card.h = h;
+                    }
+                });
+                event.prevent_default();
+            });
+            handle.add_event_listener_with_callback(
+                "pointermove",
+                pointer_move.as_ref().unchecked_ref(),
+            )?;
+            pointer_move.forget();
+
+            let document_for_up = document.clone();
+            let article_for_up = article.clone();
+            let handle_for_up = handle.clone();
+            let pointer_up = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+                let active = NOTE_RESIZE.with(|slot| {
+                    let matches = slot
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|state| state.id == card_id);
+                    *slot.borrow_mut() = None;
+                    matches
+                });
+                let _ = handle_for_up.release_pointer_capture(event.pointer_id());
+                let _ = article_for_up.class_list().remove_1("is-resizing");
+                if active {
+                    save_notes(&document_for_up);
+                }
+            });
+            handle
+                .add_event_listener_with_callback("pointerup", pointer_up.as_ref().unchecked_ref())?;
+            pointer_up.forget();
+
+            let handle_for_cancel = handle.clone();
+            let pointer_cancel = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+                NOTE_RESIZE.with(|slot| *slot.borrow_mut() = None);
+                let _ = handle_for_cancel.release_pointer_capture(event.pointer_id());
+            });
+            handle.add_event_listener_with_callback(
+                "pointercancel",
+                pointer_cancel.as_ref().unchecked_ref(),
+            )?;
+            pointer_cancel.forget();
         }
     }
     Ok(())
@@ -3654,6 +3859,9 @@ fn save_notes(document: &Document) {
             w: geometry.2,
             h: geometry.3,
             text,
+            color: element
+                .get_attribute("data-color")
+                .unwrap_or_else(default_note_color),
         });
     }
 

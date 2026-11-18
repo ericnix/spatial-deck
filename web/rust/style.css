@@ -1314,6 +1314,54 @@ html.panning * {
 
 .note-input::placeholder { color: var(--muted); }
 
+
+/* Cores e alças das notas */
+.note-card {
+  --note-bg: var(--card);
+  --note-ink: var(--ink);
+  background: var(--note-bg);
+}
+.note-card[data-color="yellow"] { --note-bg: #fde68a; --note-ink: #422006; border-color: #eab308; }
+.note-card[data-color="green"]  { --note-bg: #bbf7d0; --note-ink: #052e16; border-color: #22c55e; }
+.note-card[data-color="blue"]   { --note-bg: #bfdbfe; --note-ink: #172554; border-color: #3b82f6; }
+.note-card[data-color="pink"]   { --note-bg: #fbcfe8; --note-ink: #500724; border-color: #ec4899; }
+
+.note-card[data-color] .note-input,
+.note-card[data-color] .window-card__bar b,
+.note-card[data-color] .window-card__id,
+.note-card[data-color] .window-card__close { color: var(--note-ink); }
+.note-card[data-color] .dots i { background: var(--note-ink); opacity: .45; }
+
+.window-card__color {
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--note-bg);
+  cursor: pointer;
+}
+.window-card__color:hover { border-color: var(--accent); }
+
+.note-handle {
+  position: absolute;
+  z-index: 3;
+  width: 16px;
+  height: 16px;
+}
+.note-handle::after {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--accent);
+  border-radius: 2px;
+  background: var(--note-bg);
+}
+.note-handle--se { right: 0; bottom: 0; cursor: nwse-resize; }
+.note-handle--sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.note-handle--ne { right: 0; top: 36px; cursor: nesw-resize; }
+.note-handle--nw { left: 0; top: 36px; cursor: nwse-resize; }
+
 /* ------------------------------------------------------- camadas */
 
 .draw-handle {
