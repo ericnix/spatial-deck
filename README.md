@@ -73,6 +73,21 @@ Logs: `/tmp/spatial-deck.log` (compositor), `/tmp/spatial-deck-shell.log`
 `GTK_USE_PORTAL=0` para o seletor de arquivos abrir dentro do deck, e não no
 portal da sessão hospedeira.
 
+Se o desktop encerrar poucos segundos depois de subir, o log do compositor
+mostra `pedido de fechamento recebido do gerenciador de janelas`. Isso vem do
+**KWin da sessão hospedeira**, não de uma falha do deck: scripts do KWin
+carregados por automação podem continuar ativos e fechar a janela pelo título.
+Para conferir e parar:
+
+```sh
+busctl --user tree org.kde.KWin | grep Script
+busctl --user call org.kde.KWin /Scripting/Script3 org.kde.kwin.Script stop
+```
+
+Um `Alt+F4` real chega pelo mesmo caminho: o deck fecha a janela interna em
+foco, se houver, e só encerra quando não há nenhuma. Na automação, sempre chame
+`Script.stop` depois de rodar um script de foco.
+
 A janela do compositor é trazida para a frente automaticamente (`wmctrl -a`,
 quando disponível) e marcada como `above` (`wmctrl -r 'Spatial Deck' -b
 add,above`). Sem isso o gerenciador de janelas pode abri-la atrás do terminal,

@@ -354,6 +354,38 @@ transparência mostra o canvas (não a janela atrás).
 - Sliders e tiles do control center ficam para a etapa 7; aqui só barra.
 - Força do Wi-Fi depende do `ActiveAccessPoint`; em alguns drivers pode vir 0.
 
+## Correção — encerramento inesperado logo após subir — CONCLUÍDA
+
+Sintoma: o compositor logava `encerrando compositor` 3–30 s depois de abrir e o
+shell morria em seguida com `Error reading events from display: Pipe quebrado`.
+
+Diagnóstico:
+
+- Com `WAYLAND_DEBUG=1`, a última mensagem da conexão externa era
+  `xdg_toplevel#30.close()`: o pedido vinha do KWin, não do deck.
+- O compositor sozinho (sem shell nem serviços) também morria, então a shell não
+  era a causa; um `foot` de controle ficou aberto normalmente.
+- Havia **20 objetos `org.kde.kwin.Script`** de automações antigas ainda ativos
+  no KWin. Parando todos
+  (`busctl --user call org.kde.KWin /Scripting/ScriptN org.kde.kwin.Script stop`),
+  o compositor isolado sobreviveu 88 s e o stack completo ficou estável.
+
+Correção e prevenção:
+
+- Scripts parados; automação de foco agora carrega, roda e **para** o script.
+- O compositor passou a registrar o pedido de fechamento com posição do
+  ponteiro/janela em foco e a separar `close_requested` de `pump_exit`.
+- README ganhou a seção de diagnóstico com o comando para listar/parar scripts.
+
+### Evidências (18/11/2026)
+
+- Antes: mortes em 3,5 s, 5 s, 17 s, 29 s e 90 s, sempre com
+  `xdg_toplevel.close()`.
+- Depois: compositor isolado 88 s+; stack completo (compositor + shell +
+  serviços) estável, com `network_state` (Wi-Fi "Personal_B80"),
+  `volume_state` 65% e `battery_state`/`brightness_state` indisponíveis
+  respondendo por `status_request`.
+
 ## Próxima etapa
 
 Etapa 7 — control center, OSD e settings persistidos. Nada iniciado.

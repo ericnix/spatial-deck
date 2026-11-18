@@ -3218,6 +3218,13 @@ fn run_compositor(
         let pointer = state.pointer.clone();
         let status = winit.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => {
+                info!(
+                    x = pointer_location.x,
+                    y = pointer_location.y,
+                    focused = ?state.focused_window,
+                    windows = state.windows.len(),
+                    "pedido de fechamento recebido do gerenciador de janelas"
+                );
                 // O KWin manda o pedido de fechamento para o deck (Alt+F4 ou
                 // botão × da barra de título). Se houver uma janela interna em
                 // foco, fecha essa janela em vez de encerrar o desktop.
@@ -3554,7 +3561,11 @@ fn run_compositor(
         });
 
         if should_exit || matches!(status, PumpStatus::Exit(_)) {
-            info!("encerrando compositor");
+            info!(
+                close_requested = should_exit,
+                pump_exit = matches!(status, PumpStatus::Exit(_)),
+                "encerrando compositor"
+            );
             return Ok(());
         }
 
