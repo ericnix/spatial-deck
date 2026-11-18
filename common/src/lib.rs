@@ -203,7 +203,14 @@ pub enum IpcMessage {
         ssid: String,
         /// 0–100 (0 quando não se aplica).
         strength: u8,
+        /// `WirelessEnabled` do NetworkManager.
+        wifi_enabled: bool,
+        /// `NetworkingEnabled` do NetworkManager.
+        networking_enabled: bool,
     },
+
+    /// Liga/desliga o rádio Wi-Fi.
+    NetworkSetWifi { enabled: bool },
 
     /// Estado da bateria (UPower `DisplayDevice`).
     BatteryState {
@@ -237,6 +244,51 @@ pub enum IpcMessage {
     BrightnessCommand {
         action: BrightnessAction,
         value: u8,
+    },
+
+    /// Estado do adaptador Bluetooth (BlueZ).
+    BluetoothState {
+        available: bool,
+        enabled: bool,
+        name: String,
+    },
+
+    /// Liga/desliga o adaptador Bluetooth.
+    BluetoothSetEnabled { enabled: bool },
+
+    /// Perfis de energia (power-profiles-daemon).
+    PowerProfileState {
+        available: bool,
+        active: String,
+        profiles: Vec<String>,
+    },
+
+    /// Troca o perfil de energia ativo.
+    PowerProfileSet { profile: String },
+
+    /// OSD transitório de volume/brilho.
+    Osd {
+        /// `volume` ou `brightness`.
+        kind: String,
+        percent: u8,
+        muted: bool,
+    },
+
+    /// Pedido do shell para receber as configurações persistidas.
+    SettingsRequest,
+
+    /// Configurações persistidas (o `shell-services` é a fonte única).
+    SettingsState {
+        theme: Option<String>,
+        /// JSON do layout da barra, opaco para os serviços.
+        bar: Option<serde_json::Value>,
+        night_light: bool,
+    },
+
+    /// Alteração de uma configuração (`theme`, `bar`, `night-light`).
+    SetSetting {
+        key: String,
+        value: serde_json::Value,
     },
 }
 
@@ -920,6 +972,8 @@ mod tests {
             kind: "wifi".into(),
             ssid: "Casa".into(),
             strength: 78,
+            wifi_enabled: true,
+            networking_enabled: true,
         };
         let json = network.to_json().unwrap();
         assert!(json.contains("\"type\":\"network_state\""));
@@ -971,6 +1025,75 @@ mod tests {
         let request = IpcMessage::StatusRequest;
         let json = request.to_json().unwrap();
         assert!(json.contains("\"type\":\"status_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
+    }
+
+    #[test]
+    fn control_center_messages_round_trip() {
+        let wifi = IpcMessage::NetworkSetWifi { enabled: false };
+        let json = wifi.to_json().unwrap();
+        assert!(json.contains("\"type\":\"network_set_wifi\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), wifi);
+
+        let bluetooth = IpcMessage::BluetoothState {
+            available: true,
+            enabled: false,
+            name: "hci0".into(),
+        };
+        let json = bluetooth.to_json().unwrap();
+        assert!(json.contains("\"type\":\"bluetooth_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), bluetooth);
+
+        let set = IpcMessage::BluetoothSetEnabled { enabled: true };
+        let json = set.to_json().unwrap();
+        assert!(json.contains("\"type\":\"bluetooth_set_enabled\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), set);
+
+        let profiles = IpcMessage::PowerProfileState {
+            available: true,
+            active: "balanced".into(),
+            profiles: vec!["power-saver".into(), "balanced".into(), "performance".into()],
+        };
+        let json = profiles.to_json().unwrap();
+        assert!(json.contains("\"type\":\"power_profile_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), profiles);
+
+        let set = IpcMessage::PowerProfileSet {
+            profile: "performance".into(),
+        };
+        let json = set.to_json().unwrap();
+        assert!(json.contains("\"type\":\"power_profile_set\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), set);
+
+        let osd = IpcMessage::Osd {
+            kind: "volume".into(),
+            percent: 65,
+            muted: false,
+        };
+        let json = osd.to_json().unwrap();
+        assert!(json.contains("\"type\":\"osd\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), osd);
+
+        let settings = IpcMessage::SettingsState {
+            theme: Some("nord".into()),
+            bar: Some(serde_json::json!({ "hour24": true })),
+            night_light: false,
+        };
+        let json = settings.to_json().unwrap();
+        assert!(json.contains("\"type\":\"settings_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), settings);
+
+        let set = IpcMessage::SetSetting {
+            key: "theme".into(),
+            value: serde_json::json!("nord"),
+        };
+        let json = set.to_json().unwrap();
+        assert!(json.contains("\"type\":\"set_setting\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), set);
+
+        let request = IpcMessage::SettingsRequest;
+        let json = request.to_json().unwrap();
+        assert!(json.contains("\"type\":\"settings_request\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
     }
 

@@ -31,8 +31,8 @@ mod minimalist_render;
 use anyhow::{Context, Result};
 use canvas_render::{scaled_window_elements, ScaledSurfaceElement};
 use common::{
-    CanvasTheme, CanvasZoom, ChromeRect, ClusterPlacement, DesktopApp, IpcMessage,
-    OVERVIEW_BOTTOM, OVERVIEW_GAP, OVERVIEW_MARGIN_X, OVERVIEW_TOP,
+    BrightnessAction, CanvasTheme, CanvasZoom, ChromeRect, ClusterPlacement, DesktopApp,
+    IpcMessage, VolumeAction, OVERVIEW_BOTTOM, OVERVIEW_GAP, OVERVIEW_MARGIN_X, OVERVIEW_TOP,
 };
 use freedesktop_entry_parser::parse_entry;
 use futures_util::{SinkExt, StreamExt};
@@ -1883,7 +1883,16 @@ impl App {
             | IpcMessage::VolumeState { .. }
             | IpcMessage::BrightnessState { .. }
             | IpcMessage::VolumeCommand { .. }
-            | IpcMessage::BrightnessCommand { .. } => {
+            | IpcMessage::BrightnessCommand { .. }
+            | IpcMessage::NetworkSetWifi { .. }
+            | IpcMessage::BluetoothState { .. }
+            | IpcMessage::BluetoothSetEnabled { .. }
+            | IpcMessage::PowerProfileState { .. }
+            | IpcMessage::PowerProfileSet { .. }
+            | IpcMessage::Osd { .. }
+            | IpcMessage::SettingsRequest
+            | IpcMessage::SettingsState { .. }
+            | IpcMessage::SetSetting { .. } => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.
@@ -3265,6 +3274,31 @@ fn run_compositor(
                         };
                         let ctrl_alt = modifiers.ctrl && modifiers.alt;
                         let ctrl_shift = modifiers.ctrl && modifiers.shift;
+
+                        // Teclas multimídia: volume e brilho globais do deck.
+                        // No modo aninhado elas só chegam quando a janela do
+                        // deck tem foco (o WM hospedeiro pode capturá-las).
+                        let volume_action = match sym.raw() {
+                            0x1008_FF13 => Some(VolumeAction::Up),
+                            0x1008_FF11 => Some(VolumeAction::Down),
+                            0x1008_FF12 => Some(VolumeAction::Mute),
+                            _ => None,
+                        };
+                        if let Some(action) = volume_action {
+                            info!(?action, "atalho de volume");
+                            state.publish(IpcMessage::VolumeCommand { action, value: 0 });
+                            return FilterResult::Intercept(());
+                        }
+                        let brightness_action = match sym.raw() {
+                            0x1008_FF02 => Some(BrightnessAction::Up),
+                            0x1008_FF03 => Some(BrightnessAction::Down),
+                            _ => None,
+                        };
+                        if let Some(action) = brightness_action {
+                            info!(?action, "atalho de brilho");
+                            state.publish(IpcMessage::BrightnessCommand { action, value: 0 });
+                            return FilterResult::Intercept(());
+                        }
 
                         // Visão geral. Escape sai; Ctrl+Alt+O alterna (o
                         // Alt+Tab puro é capturado pelo WM hospedeiro).

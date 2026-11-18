@@ -111,6 +111,12 @@ screen_y = world_y * scale + offset_y</pre>
     </div>
 
     <div id="bar-right" class="bar__group bar__group--end">
+      <div id="bar-mod-control" class="bar__module">
+        <button id="control-center-btn" class="sys-btn cc-open" type="button" aria-expanded="false" title="Central de controle" aria-label="Central de controle">
+          <span class="sys-icon"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></span>
+        </button>
+      </div>
+
       <div id="bar-mod-themes" class="bar__module">
         <div class="theme-menu">
           <button id="theme-menu-btn" class="hud-action" type="button" aria-expanded="false" title="Tema do canvas">Tema: <b id="theme-label">Padrão</b></button>
@@ -178,6 +184,62 @@ screen_y = world_y * scale + offset_y</pre>
       </div>
     </div>
   </header>
+
+  <section id="control-center" class="control-center" hidden aria-label="Central de controle">
+    <header class="control-center__head">
+      <b>Central de controle</b>
+      <span class="control-center__spacer"></span>
+      <button id="control-center-close" class="panel-btn" type="button" aria-label="Fechar central de controle">×</button>
+    </header>
+
+    <div class="control-center__tiles">
+      <button id="cc-wifi" class="cc-tile" type="button" data-cc-action="wifi" aria-pressed="false">
+        <span class="cc-tile__dot"></span>
+        <span class="cc-tile__text"><b>Wi-Fi</b><small id="cc-wifi-sub">—</small></span>
+      </button>
+      <button id="cc-bluetooth" class="cc-tile" type="button" data-cc-action="bluetooth" aria-pressed="false" disabled>
+        <span class="cc-tile__dot"></span>
+        <span class="cc-tile__text"><b>Bluetooth</b><small id="cc-bluetooth-sub">Sem adaptador</small></span>
+      </button>
+      <button id="cc-dnd" class="cc-tile" type="button" data-cc-action="dnd" aria-pressed="false">
+        <span class="cc-tile__dot"></span>
+        <span class="cc-tile__text"><b>Não perturbe</b><small id="cc-dnd-sub">Desligado</small></span>
+      </button>
+      <button id="cc-night" class="cc-tile" type="button" data-cc-action="night-light" aria-pressed="false" title="Placeholder: gamma real na etapa 11">
+        <span class="cc-tile__dot"></span>
+        <span class="cc-tile__text"><b>Night light</b><small id="cc-night-sub">Em breve</small></span>
+      </button>
+    </div>
+
+    <div class="cc-slider" id="cc-volume-row">
+      <button id="cc-volume-mute" class="panel-btn cc-slider__icon" type="button" aria-pressed="false" title="Mudo">🔈</button>
+      <input id="cc-volume" class="cc-range" type="range" min="0" max="100" step="1" value="0" aria-label="Volume">
+      <b id="cc-volume-label" class="cc-slider__value">0%</b>
+    </div>
+    <div class="cc-slider" id="cc-brightness-row">
+      <span class="cc-slider__icon" aria-hidden="true">☀</span>
+      <input id="cc-brightness" class="cc-range" type="range" min="0" max="100" step="1" value="0" aria-label="Brilho">
+      <b id="cc-brightness-label" class="cc-slider__value">0%</b>
+    </div>
+
+    <p class="control-center__title">Tema do canvas</p>
+    <div id="cc-themes" class="control-center__themes" role="group" aria-label="Tema do canvas"></div>
+
+    <div class="control-center__rows">
+      <button id="cc-power" class="cc-row" type="button" data-cc-action="power" title="Alternar perfil de energia">
+        <span>Energia</span><b id="cc-power-sub">—</b>
+      </button>
+      <button id="cc-session" class="cc-row cc-row--muted" type="button" data-cc-action="session" title="Chega na etapa 8">
+        <span>Sessão</span><b>Em breve</b>
+      </button>
+    </div>
+  </section>
+
+  <div id="osd" class="osd" hidden aria-live="polite">
+    <span id="osd-icon" class="osd__icon"></span>
+    <span class="osd__track"><i id="osd-fill" class="osd__fill"></i></span>
+    <b id="osd-label" class="osd__label">0%</b>
+  </div>
 
   <div id="deck-shell">
     <div class="deck__frame" aria-hidden="true"></div>

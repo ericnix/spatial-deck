@@ -205,8 +205,10 @@ qualquer aplicativo funcionam direto. Mensagens IPC: `notification`,
 
 O HUD é uma barra com três grupos (esquerda/centro/direita). O botão **Barra**
 abre a configuração: cada módulo pode ir para esquerda, centro, direita ou
-ficar oculto, e as setas ↑/↓ mudam a ordem dentro do grupo. A escolha fica em
-`localStorage` (`spatial-deck.bar`), junto com o formato 12/24h do relógio.
+ficar oculto, e as setas ↑/↓ mudam a ordem dentro do grupo. A escolha tem o
+`shell-services` como fonte única (`settings.json`); o `localStorage`
+(`spatial-deck.bar`) fica como cache e é migrado no primeiro boot. O formato
+12/24h do relógio usa o mesmo caminho.
 
 | Módulo | Conteúdo |
 | --- | --- |
@@ -215,6 +217,7 @@ ficar oculto, e as setas ↑/↓ mudam a ordem dentro do grupo. A escolha fica e
 | Status | estado da conexão IPC |
 | Temas | botão compacto com a lista dos cinco temas |
 | Zoom | −, porcentagem, +, 1:1 e Ajustar |
+| Central de controle | gaveta com Wi-Fi, Bluetooth, DND, night light, tema, energia, volume e brilho |
 | Notificações | DND e histórico |
 | Visão geral | miniaturas das janelas |
 
@@ -265,6 +268,45 @@ Mensagens IPC: `network_state`, `battery_state`, `volume_state`,
 `brightness_state`, `volume_command`, `brightness_command` e `status_request`.
 O frontend pede o conjunto completo ao abrir a página, porque o primeiro
 estado pode ser publicado antes do WebSocket conectar.
+
+### Central de controle
+
+O botão de sliders na barra (módulo `control`) abre a gaveta ancorada à
+direita. Fecha com `Esc`, com o × ou clique fora, e entra em `ChromeRects` para
+ficar acima das janelas.
+
+| Tile | Ação |
+| --- | --- |
+| Wi-Fi | liga/desliga `WirelessEnabled` (NetworkManager); mostra SSID e sinal |
+| Bluetooth | liga/desliga `Adapter1.Powered` (BlueZ); desabilitado sem adaptador |
+| Não perturbe | mesmo DND da barra (persistido em `notifications.json`) |
+| Night light | placeholder persistido; gamma real fica para a etapa 11 |
+| Tema do canvas | os cinco temas, com a precedência da URL documentada |
+| Energia | alterna `PowerProfiles` (power-profiles-daemon/tuned-ppd) |
+| Sessão | placeholder até a etapa 8 |
+
+Os sliders de **volume** (com mudo) e **brilho** mandam comandos absolutos; o
+de brilho some sem backlight. O estado dos tiles vem do `shell-services`
+(`network_state`, `bluetooth_state`, `power_profile_state`).
+
+### OSD e teclas de mídia
+
+Mudanças de volume/brilho mostram um OSD transitório (1,6 s) no rodapé do
+canvas, também em `ChromeRects`. O serviço emite `osd` quando o valor muda —
+inclusive por fontes externas — e o primeiro sample não gera OSD.
+
+`XF86AudioRaiseVolume`, `XF86AudioLowerVolume`, `XF86AudioMute`,
+`XF86MonBrightnessUp` e `XF86MonBrightnessDown` são capturadas pelo compositor
+e viram `volume_command`/`brightness_command`. No modo aninhado elas só chegam
+quando a janela do deck tem foco; o WM hospedeiro pode capturá-las antes.
+
+### Configurações persistidas
+
+Fonte única: `~/.config/spatial-deck/settings.json`, gravado pelo
+`shell-services` (chaves `theme`, `bar` e `night_light`). O frontend mantém o
+`localStorage` como cache/fallback, pede `settings_request` ao conectar e
+envia `set_setting` a cada mudança. `?theme=` continua tendo precedência sobre
+o arquivo (e o tema escolhido na UI é regravado como preferência).
 
 ### Regiões do canvas
 
@@ -509,6 +551,11 @@ O JSON é internamente marcado por `type` (snake_case):
 {"type":"notification","id":3,"app_name":"notify-send","summary":"Oi","body":"corpo","icon":"","urgency":1,"actions":[],"timeout":-1,"replaces_id":0}
 {"type":"tray_update","items":[{"id":":1.89/StatusNotifierItem","title":"App","icon_name":"app","status":"Active","has_menu":true,"item_is_menu":false}]}
 {"type":"media_state","player":"org.mpris.MediaPlayer2.vlc","title":"Faixa","artist":"Artista","status":"Playing","can_next":true,"can_prev":true}
+{"type":"network_state","connected":true,"kind":"wifi","ssid":"Casa","strength":82,"wifi_enabled":true,"networking_enabled":true}
+{"type":"bluetooth_state","available":false,"enabled":false,"name":""}
+{"type":"power_profile_state","available":true,"active":"power-saver","profiles":["power-saver","balanced","performance"]}
+{"type":"osd","kind":"volume","percent":65,"muted":false}
+{"type":"settings_state","theme":"nord","bar":{"hour24":true,"modules":[]},"night_light":false}
 ```
 
 - `CanvasTransform` aplica `screen_x = world_x * scale + offset_x` e

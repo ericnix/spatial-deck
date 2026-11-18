@@ -6,12 +6,14 @@
 //! - **Brilho**: `/sys/class/backlight`, escrita via `logind.SetBrightness`
 //!   (sem root). Sem backlight, o módulo fica indisponível.
 
-use std::{fs, process::Stdio, time::Duration};
+use std::{collections::HashMap, fs, process::Stdio, time::Duration};
 
 use common::{BrightnessAction, IpcMessage, VolumeAction};
 use tokio::{process::Command, sync::mpsc, time::interval};
 use tracing::{debug, warn};
-use zbus::{wire::OwnedObjectPath, Connection, Proxy};
+use zbus::{
+    wire::OwnedObjectPath, zvariant::OwnedValue, Connection, Proxy,
+};
 
 const NM_NAME: &str = "org.freedesktop.NetworkManager";
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
@@ -22,10 +24,18 @@ const LOGIND_MANAGER: &str = "org.freedesktop.login1.Manager";
 const LOGIND_SESSION: &str = "org.freedesktop.login1.Session";
 const UPOWER_DEVICE: &str = "org.freedesktop.UPower.Device";
 const UPOWER_DISPLAY_PATH: &str = "/org/freedesktop/UPower/devices/DisplayDevice";
+const POWER_PROFILES_NAME: &str = "org.freedesktop.UPower.PowerProfiles";
+const POWER_PROFILES_PATH: &str = "/org/freedesktop/UPower/PowerProfiles";
+const POWER_PROFILES_IFACE: &str = "org.freedesktop.UPower.PowerProfiles";
+const BLUEZ_NAME: &str = "org.bluez";
+const BLUEZ_ADAPTER: &str = "org.bluez.Adapter1";
 
 pub enum SystemCommand {
     Volume { action: VolumeAction, value: u8 },
     Brightness { action: BrightnessAction, value: u8 },
+    SetWifi { enabled: bool },
+    SetBluetooth { enabled: bool },
+    SetPowerProfile { profile: String },
     Refresh,
 }
 
@@ -48,17 +58,43 @@ pub async fn run(ipc: mpsc::Sender<IpcMessage>, mut commands: mpsc::Receiver<Sys
     let mut last_battery = String::new();
     let mut last_volume = String::new();
     let mut last_brightness = String::new();
+    let mut last_bluetooth = String::new();
+    let mut last_profiles = String::new();
+    // O primeiro sample de volume/brilho só popula o estado; o OSD aparece
+    // a partir da primeira mudança real.
+    let mut volume_seen = false;
+    let mut brightness_seen = false;
+    let mut bluetooth_next: u64 = 0;
     let mut ticker = interval(Duration::from_secs(1));
     let mut tick: u64 = 0;
 
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                sample_volume(&audio, &ipc, &mut last_volume).await;
-                sample_brightness(&ipc, &mut last_brightness).await;
+                sample_volume(&audio, &ipc, &mut last_volume, volume_seen).await;
+                sample_brightness(&ipc, &mut last_brightness, brightness_seen).await;
+                volume_seen = true;
+                brightness_seen = true;
                 if tick % 3 == 0 {
                     sample_network(system.as_ref(), &ipc, &mut last_network).await;
                     sample_battery(system.as_ref(), &ipc, &mut last_battery).await;
+                    sample_profiles(system.as_ref(), &ipc, &mut last_profiles).await;
+                }
+                if tick >= bluetooth_next {
+                    let snapshot = read_bluetooth(system.as_ref()).await;
+                    // Sem adaptador, tenta de novo só a cada minuto.
+                    bluetooth_next = tick + if snapshot.0 { 3 } else { 60 };
+                    let key = format!("{}|{}|{}", snapshot.0, snapshot.1, snapshot.2);
+                    if key != last_bluetooth {
+                        last_bluetooth = key;
+                        let _ = ipc
+                            .send(IpcMessage::BluetoothState {
+                                available: snapshot.0,
+                                enabled: snapshot.1,
+                                name: snapshot.2,
+                            })
+                            .await;
+                    }
                 }
                 tick = tick.wrapping_add(1);
             }
@@ -72,20 +108,38 @@ pub async fn run(ipc: mpsc::Sender<IpcMessage>, mut commands: mpsc::Receiver<Sys
                         last_battery.clear();
                         last_volume.clear();
                         last_brightness.clear();
+                        last_bluetooth.clear();
+                        last_profiles.clear();
                         sample_network(system.as_ref(), &ipc, &mut last_network).await;
                         sample_battery(system.as_ref(), &ipc, &mut last_battery).await;
-                        sample_volume(&audio, &ipc, &mut last_volume).await;
-                        sample_brightness(&ipc, &mut last_brightness).await;
+                        sample_profiles(system.as_ref(), &ipc, &mut last_profiles).await;
+                        sample_volume(&audio, &ipc, &mut last_volume, false).await;
+                        sample_brightness(&ipc, &mut last_brightness, false).await;
                     }
                     SystemCommand::Volume { action, value } => {
                         apply_volume(audio, action, value).await;
                         last_volume.clear();
-                        sample_volume(&audio, &ipc, &mut last_volume).await;
+                        sample_volume(&audio, &ipc, &mut last_volume, volume_seen).await;
                     }
                     SystemCommand::Brightness { action, value } => {
                         apply_brightness(system.as_ref(), action, value).await;
                         last_brightness.clear();
-                        sample_brightness(&ipc, &mut last_brightness).await;
+                        sample_brightness(&ipc, &mut last_brightness, brightness_seen).await;
+                    }
+                    SystemCommand::SetWifi { enabled } => {
+                        apply_wifi(system.as_ref(), enabled).await;
+                        last_network.clear();
+                        sample_network(system.as_ref(), &ipc, &mut last_network).await;
+                    }
+                    SystemCommand::SetBluetooth { enabled } => {
+                        apply_bluetooth(system.as_ref(), enabled).await;
+                        last_bluetooth.clear();
+                        bluetooth_next = 0;
+                    }
+                    SystemCommand::SetPowerProfile { profile } => {
+                        apply_power_profile(system.as_ref(), &profile).await;
+                        last_profiles.clear();
+                        sample_profiles(system.as_ref(), &ipc, &mut last_profiles).await;
                     }
                 }
             }
@@ -213,6 +267,7 @@ async fn sample_volume(
     backend: &AudioBackend,
     ipc: &mpsc::Sender<IpcMessage>,
     last: &mut String,
+    announce: bool,
 ) {
     let (available, percent, muted) = read_volume(*backend).await;
     let key = format!("{available}|{percent}|{muted}");
@@ -225,6 +280,15 @@ async fn sample_volume(
                 muted,
             })
             .await;
+        if announce && available {
+            let _ = ipc
+                .send(IpcMessage::Osd {
+                    kind: "volume".to_owned(),
+                    percent,
+                    muted,
+                })
+                .await;
+        }
     }
 }
 
@@ -270,7 +334,7 @@ fn backlight() -> Option<(String, u32, u32)> {
     Some((name, current, max))
 }
 
-async fn sample_brightness(ipc: &mpsc::Sender<IpcMessage>, last: &mut String) {
+async fn sample_brightness(ipc: &mpsc::Sender<IpcMessage>, last: &mut String, announce: bool) {
     let (available, percent) = match backlight() {
         Some((_, current, max)) if max > 0 => {
             (true, ((current * 100) / max).min(100) as u8)
@@ -286,6 +350,15 @@ async fn sample_brightness(ipc: &mpsc::Sender<IpcMessage>, last: &mut String) {
                 percent,
             })
             .await;
+        if announce && available {
+            let _ = ipc
+                .send(IpcMessage::Osd {
+                    kind: "brightness".to_owned(),
+                    percent,
+                    muted: false,
+                })
+                .await;
+        }
     }
 }
 
@@ -347,16 +420,45 @@ async fn apply_brightness(
 // Rede (NetworkManager)
 // ---------------------------------------------------------------------------
 
-async fn read_network(connection: Option<&Connection>) -> (bool, String, String, u8) {
+struct NetworkSnapshot {
+    connected: bool,
+    kind: String,
+    ssid: String,
+    strength: u8,
+    wifi_enabled: bool,
+    networking_enabled: bool,
+}
+
+async fn read_network(connection: Option<&Connection>) -> NetworkSnapshot {
+    let offline = NetworkSnapshot {
+        connected: false,
+        kind: "offline".to_owned(),
+        ssid: String::new(),
+        strength: 0,
+        wifi_enabled: false,
+        networking_enabled: false,
+    };
     let Some(connection) = connection else {
-        return (false, "offline".to_owned(), String::new(), 0);
+        return offline;
     };
     let Ok(proxy) = Proxy::new_owned(connection.clone(), NM_NAME, NM_PATH, NM_IFACE).await else {
-        return (false, "offline".to_owned(), String::new(), 0);
+        return offline;
     };
+    let wifi_enabled = proxy
+        .get_property::<bool>("WirelessEnabled")
+        .await
+        .unwrap_or(false);
+    let networking_enabled = proxy
+        .get_property::<bool>("NetworkingEnabled")
+        .await
+        .unwrap_or(false);
     let state: u32 = proxy.get_property("State").await.unwrap_or(0);
     if state < 40 {
-        return (false, "offline".to_owned(), String::new(), 0);
+        return NetworkSnapshot {
+            wifi_enabled,
+            networking_enabled,
+            ..offline
+        };
     }
 
     let active: Vec<OwnedObjectPath> = proxy
@@ -397,14 +499,26 @@ async fn read_network(connection: Option<&Connection>) -> (bool, String, String,
     }
 
     let Some((_, kind, ssid, path)) = chosen else {
-        return (true, "offline".to_owned(), String::new(), 0);
+        return NetworkSnapshot {
+            connected: true,
+            wifi_enabled,
+            networking_enabled,
+            ..offline
+        };
     };
     let strength = if kind == "wifi" {
         wifi_strength(connection, &path).await.unwrap_or(0)
     } else {
         100
     };
-    (true, kind, ssid, strength)
+    NetworkSnapshot {
+        connected: true,
+        kind,
+        ssid,
+        strength,
+        wifi_enabled,
+        networking_enabled,
+    }
 }
 
 fn classify(kind: &str) -> String {
@@ -473,18 +587,194 @@ async fn sample_network(
     ipc: &mpsc::Sender<IpcMessage>,
     last: &mut String,
 ) {
-    let (connected, kind, ssid, strength) = read_network(connection).await;
-    let key = format!("{connected}|{kind}|{ssid}|{strength}");
+    let snapshot = read_network(connection).await;
+    let key = format!(
+        "{}|{}|{}|{}|{}|{}",
+        snapshot.connected,
+        snapshot.kind,
+        snapshot.ssid,
+        snapshot.strength,
+        snapshot.wifi_enabled,
+        snapshot.networking_enabled
+    );
     if key != *last {
         *last = key;
         let _ = ipc
             .send(IpcMessage::NetworkState {
-                connected,
-                kind,
-                ssid,
-                strength,
+                connected: snapshot.connected,
+                kind: snapshot.kind,
+                ssid: snapshot.ssid,
+                strength: snapshot.strength,
+                wifi_enabled: snapshot.wifi_enabled,
+                networking_enabled: snapshot.networking_enabled,
             })
             .await;
+    }
+}
+
+async fn apply_wifi(connection: Option<&Connection>, enabled: bool) {
+    let Some(connection) = connection else {
+        return;
+    };
+    let Ok(proxy) = Proxy::new_owned(connection.clone(), NM_NAME, NM_PATH, NM_IFACE).await else {
+        return;
+    };
+    if enabled {
+        // Ligar o rádio com o NetworkManager desligado não faria efeito.
+        if let Err(error) = proxy.set_property("NetworkingEnabled", true).await {
+            debug!(%error, "NetworkingEnabled recusado");
+        }
+    }
+    if let Err(error) = proxy.set_property("WirelessEnabled", enabled).await {
+        warn!(%error, enabled, "falha ao alternar o Wi-Fi");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bluetooth (BlueZ)
+// ---------------------------------------------------------------------------
+
+fn adapter_path(index: u8) -> String {
+    format!("/org/bluez/hci{index}")
+}
+
+/// Evita acordar/ativar o BlueZ (e o spam de avisos do zbus) quando o
+/// serviço não está rodando.
+async fn bluez_available(connection: &Connection) -> bool {
+    let Ok(bus) = zbus::fdo::DBusProxy::new(connection).await else {
+        return false;
+    };
+    let Ok(name) = zbus::names::BusName::try_from(BLUEZ_NAME) else {
+        return false;
+    };
+    bus.name_has_owner(name).await.unwrap_or(false)
+}
+
+async fn find_adapter(connection: &Connection) -> Option<Proxy<'static>> {
+    if !bluez_available(connection).await {
+        return None;
+    }
+    for index in 0..4 {
+        let Ok(proxy) = Proxy::new_owned(
+            connection.clone(),
+            BLUEZ_NAME,
+            adapter_path(index),
+            BLUEZ_ADAPTER,
+        )
+        .await
+        else {
+            continue;
+        };
+        if proxy.get_property::<bool>("Powered").await.is_ok() {
+            return Some(proxy);
+        }
+    }
+    None
+}
+
+async fn read_bluetooth(connection: Option<&Connection>) -> (bool, bool, String) {
+    let Some(connection) = connection else {
+        return (false, false, String::new());
+    };
+    let Some(adapter) = find_adapter(connection).await else {
+        return (false, false, String::new());
+    };
+    let enabled = adapter.get_property::<bool>("Powered").await.unwrap_or(false);
+    let name = match adapter.get_property::<String>("Alias").await {
+        Ok(name) => name,
+        Err(_) => adapter
+            .get_property::<String>("Address")
+            .await
+            .unwrap_or_default(),
+    };
+    (true, enabled, name)
+}
+
+async fn apply_bluetooth(connection: Option<&Connection>, enabled: bool) {
+    let Some(connection) = connection else {
+        return;
+    };
+    let Some(adapter) = find_adapter(connection).await else {
+        warn!("sem adaptador Bluetooth para alternar");
+        return;
+    };
+    if let Err(error) = adapter.set_property("Powered", enabled).await {
+        warn!(%error, enabled, "falha ao alternar o Bluetooth");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Perfil de energia (power-profiles-daemon)
+// ---------------------------------------------------------------------------
+
+async fn read_profiles(connection: Option<&Connection>) -> (bool, String, Vec<String>) {
+    let Some(connection) = connection else {
+        return (false, String::new(), Vec::new());
+    };
+    let Ok(proxy) = Proxy::new_owned(
+        connection.clone(),
+        POWER_PROFILES_NAME,
+        POWER_PROFILES_PATH,
+        POWER_PROFILES_IFACE,
+    )
+    .await
+    else {
+        return (false, String::new(), Vec::new());
+    };
+    let Ok(active) = proxy.get_property::<String>("ActiveProfile").await else {
+        return (false, String::new(), Vec::new());
+    };
+    let entries: Vec<HashMap<String, OwnedValue>> = proxy
+        .get_property("Profiles")
+        .await
+        .unwrap_or_default();
+    let profiles = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .get("Profile")
+                .and_then(|value| <&str>::try_from(value).ok())
+                .map(str::to_owned)
+        })
+        .collect();
+    (true, active, profiles)
+}
+
+async fn sample_profiles(
+    connection: Option<&Connection>,
+    ipc: &mpsc::Sender<IpcMessage>,
+    last: &mut String,
+) {
+    let (available, active, profiles) = read_profiles(connection).await;
+    let key = format!("{available}|{active}|{}", profiles.join(","));
+    if key != *last {
+        *last = key;
+        let _ = ipc
+            .send(IpcMessage::PowerProfileState {
+                available,
+                active,
+                profiles,
+            })
+            .await;
+    }
+}
+
+async fn apply_power_profile(connection: Option<&Connection>, profile: &str) {
+    let Some(connection) = connection else {
+        return;
+    };
+    let Ok(proxy) = Proxy::new_owned(
+        connection.clone(),
+        POWER_PROFILES_NAME,
+        POWER_PROFILES_PATH,
+        POWER_PROFILES_IFACE,
+    )
+    .await
+    else {
+        return;
+    };
+    if let Err(error) = proxy.set_property("ActiveProfile", profile).await {
+        warn!(%error, profile, "falha ao trocar o perfil de energia");
     }
 }
 

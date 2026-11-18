@@ -1752,3 +1752,185 @@ html.panning * {
   #app-drawer { bottom: 86px; }
   .app-drawer__title { display: none; }
 }
+
+/* ------------------------------------------------- central de controle */
+
+.control-center {
+  position: fixed;
+  top: 78px;
+  right: 18px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 330px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--popover-bg);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .38);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+.control-center[hidden] { display: none; }
+
+.control-center__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 2px;
+}
+.control-center__head b { font-size: 12px; letter-spacing: .04em; }
+.control-center__spacer { flex: 1; }
+
+.control-center__tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.cc-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cc-tile:hover { background: var(--chip-bg-hover); }
+.cc-tile[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+.cc-tile[aria-pressed="true"] .cc-tile__dot { background: var(--accent); opacity: 1; }
+.cc-tile:disabled { opacity: .45; cursor: default; }
+
+.cc-tile__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: .5;
+}
+.cc-tile__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cc-tile__text b { color: var(--ink); font-size: 11px; font-weight: 600; }
+.cc-tile__text small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cc-slider { display: flex; align-items: center; gap: 8px; }
+.cc-slider[hidden] { display: none; }
+.cc-slider__icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.cc-slider__icon[aria-pressed="true"] { color: var(--accent); }
+.cc-range { flex: 1; min-width: 0; accent-color: var(--accent); }
+.cc-slider__value {
+  min-width: 38px;
+  color: var(--ink);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.control-center__title {
+  margin: 4px 2px 0;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.control-center__themes { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.control-center__rows { display: flex; flex-direction: column; gap: 4px; }
+.cc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.cc-row:hover { background: var(--chip-bg-hover); }
+.cc-row b { color: var(--ink); font-weight: 600; }
+.cc-row[hidden] { display: none; }
+.cc-row--muted { opacity: .65; }
+.cc-row--muted b { color: var(--muted); }
+
+/* ------------------------------------------------------------------ OSD */
+
+.osd {
+  position: fixed;
+  left: 50%;
+  bottom: 122px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 240px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--hud-bg);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .35);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transform: translateX(-50%);
+}
+.osd[hidden] { display: none; }
+.osd__icon { display: grid; place-items: center; width: 20px; height: 20px; color: var(--ink); }
+.osd__icon svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.osd__track {
+  position: relative;
+  flex: 1;
+  min-width: 120px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+.osd__fill {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+  transition: width .12s ease-out;
+}
+.osd__label {
+  min-width: 40px;
+  color: var(--ink);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

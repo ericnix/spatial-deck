@@ -12,6 +12,7 @@ mod dbus;
 mod ipc;
 mod media;
 mod regions;
+mod settings;
 mod system;
 mod store;
 mod tray;
@@ -40,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
 
     let store = Arc::new(Mutex::new(Store::load()));
     let regions = Arc::new(Mutex::new(RegionStore::load()));
+    let mut settings = settings::Settings::load();
     let (ipc_tx, ipc_rx) = mpsc::channel(64);
     let (incoming_tx, mut incoming_rx) = mpsc::channel(256);
 
@@ -98,6 +100,7 @@ async fn main() -> anyhow::Result<()> {
                     message,
                     &store,
                     &regions,
+                    &mut settings,
                     &ipc_tx,
                     &emitter,
                     &tray_tx,
@@ -134,6 +137,7 @@ async fn handle(
     message: IpcMessage,
     store: &Arc<Mutex<Store>>,
     regions: &Arc<Mutex<RegionStore>>,
+    settings: &mut settings::Settings,
     ipc: &mpsc::Sender<IpcMessage>,
     emitter: &SignalEmitter<'static>,
     tray: &mpsc::Sender<tray::TrayCommand>,
@@ -149,6 +153,17 @@ async fn handle(
         }
         IpcMessage::NotificationHistoryRequest => {
             announce(store, ipc).await;
+        }
+        IpcMessage::SettingsRequest => {
+            let _ = ipc.send(settings.state()).await;
+        }
+        IpcMessage::SetSetting { key, value } => {
+            if settings.set(&key, &value) {
+                settings.save();
+                let _ = ipc.send(settings.state()).await;
+            } else {
+                warn!(%key, "configuração desconhecida ou com valor inválido");
+            }
         }
         IpcMessage::RegionListRequest => {
             send_regions(regions, ipc).await;
@@ -213,8 +228,25 @@ async fn handle(
         IpcMessage::NetworkState { .. }
         | IpcMessage::BatteryState { .. }
         | IpcMessage::VolumeState { .. }
-        | IpcMessage::BrightnessState { .. } => {
+        | IpcMessage::BrightnessState { .. }
+        | IpcMessage::BluetoothState { .. }
+        | IpcMessage::PowerProfileState { .. }
+        | IpcMessage::Osd { .. }
+        | IpcMessage::SettingsState { .. } => {
             // Estados produzidos pelos próprios serviços.
+        }
+        IpcMessage::NetworkSetWifi { enabled } => {
+            let _ = system.send(system::SystemCommand::SetWifi { enabled }).await;
+        }
+        IpcMessage::BluetoothSetEnabled { enabled } => {
+            let _ = system
+                .send(system::SystemCommand::SetBluetooth { enabled })
+                .await;
+        }
+        IpcMessage::PowerProfileSet { profile } => {
+            let _ = system
+                .send(system::SystemCommand::SetPowerProfile { profile })
+                .await;
         }
         IpcMessage::TrayUpdate { .. }
         | IpcMessage::TrayMenu { .. }

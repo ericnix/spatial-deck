@@ -47,11 +47,12 @@ const NOTE_H: f64 = 280.0;
 const BAR_KEY: &str = "spatial-deck.bar";
 
 /// Módulos da barra: id, rótulo e slot padrão.
-const BAR_MODULES: [(&str, &str, &str); 13] = [
+const BAR_MODULES: [(&str, &str, &str); 14] = [
     ("regions", "Regiões", "left"),
     ("clock", "Relógio", "center"),
     ("media", "Mídia", "center"),
     ("status", "Status", "left"),
+    ("control", "Central de controle", "right"),
     ("themes", "Temas", "right"),
     ("zoom", "Zoom", "right"),
     ("tray", "Bandeja", "right"),
@@ -261,6 +262,17 @@ struct State {
     network_kind: String,
     network_ssid: String,
     network_strength: u8,
+    network_wifi_enabled: bool,
+    network_networking_enabled: bool,
+    bluetooth_available: bool,
+    bluetooth_enabled: bool,
+    bluetooth_name: String,
+    power_available: bool,
+    power_active: String,
+    power_profiles: Vec<String>,
+    night_light: bool,
+    /// O tema veio de `?theme=`, que tem precedência sobre o settings.json.
+    theme_from_url: bool,
     battery_present: bool,
     battery_percent: u8,
     battery_charging: bool,
@@ -316,6 +328,16 @@ impl Default for State {
             network_kind: String::new(),
             network_ssid: String::new(),
             network_strength: 0,
+            network_wifi_enabled: false,
+            network_networking_enabled: false,
+            bluetooth_available: false,
+            bluetooth_enabled: false,
+            bluetooth_name: String::new(),
+            power_available: false,
+            power_active: String::new(),
+            power_profiles: Vec::new(),
+            night_light: false,
+            theme_from_url: false,
             battery_present: false,
             battery_percent: 0,
             battery_charging: false,
@@ -359,6 +381,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_notifications(&window, &document)?;
     setup_tray_media(&document)?;
     setup_system(&document)?;
+    setup_control_center(&window, &document)?;
     setup_layers(&document)?;
     drawing::init(&document)?;
     connect_websocket();
@@ -414,6 +437,7 @@ fn apply_initial_theme(window: &Window, document: &Document) -> Result<(), JsVal
             if let Some(value) = part.strip_prefix("theme=") {
                 if let Some(candidate) = CanvasTheme::from_name(value) {
                     theme = candidate;
+                    STATE.with(|state| state.borrow_mut().theme_from_url = true);
                 }
             }
         }
@@ -476,7 +500,17 @@ fn set_theme(window: &Window, document: &Document, theme: CanvasTheme) -> Result
 
     draw_grid(window, document)?;
     send_message(&IpcMessage::SetTheme { theme });
+    persist_setting("theme", serde_json::Value::String(theme.as_str().to_owned()));
     Ok(())
+}
+
+/// Envia uma configuração para o `shell-services`, que é a fonte única em
+/// `~/.config/spatial-deck/settings.json`.
+fn persist_setting(key: &str, value: serde_json::Value) {
+    send_message(&IpcMessage::SetSetting {
+        key: key.to_owned(),
+        value,
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -1681,6 +1715,7 @@ fn connect_websocket() {
         send_message(&IpcMessage::TrayRequest);
         send_message(&IpcMessage::MediaRequest);
         send_message(&IpcMessage::StatusRequest);
+        send_message(&IpcMessage::SettingsRequest);
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             send_chrome_rects(&document);
         }
@@ -1801,6 +1836,8 @@ fn send_chrome_rects(document: &Document) {
         "bar-settings-panel",
         "tray-menu",
         "layers-panel",
+        "control-center",
+        "osd",
     ] {
         let Some(element) = document.get_element_by_id(id) else {
             continue;
@@ -2056,6 +2093,8 @@ fn handle_server_message(text: &str) {
             kind,
             ssid,
             strength,
+            wifi_enabled,
+            networking_enabled,
         } => {
             STATE.with(|state| {
                 let mut state = state.borrow_mut();
@@ -2063,9 +2102,51 @@ fn handle_server_message(text: &str) {
                 state.network_kind = kind;
                 state.network_ssid = ssid;
                 state.network_strength = strength;
+                state.network_wifi_enabled = wifi_enabled;
+                state.network_networking_enabled = networking_enabled;
             });
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
                 render_system(&document);
+                render_control_center(&document);
+            }
+        }
+        IpcMessage::BluetoothState {
+            available,
+            enabled,
+            name,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.bluetooth_available = available;
+                state.bluetooth_enabled = enabled;
+                state.bluetooth_name = name;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_control_center(&document);
+            }
+        }
+        IpcMessage::PowerProfileState {
+            available,
+            active,
+            profiles,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.power_available = available;
+                state.power_active = active;
+                state.power_profiles = profiles;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_control_center(&document);
+            }
+        }
+        IpcMessage::Osd {
+            kind,
+            percent,
+            muted,
+        } => {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                show_osd(&document, &kind, percent, muted);
             }
         }
         IpcMessage::BatteryState {
@@ -2114,7 +2195,15 @@ fn handle_server_message(text: &str) {
             STATE.with(|state| state.borrow_mut().dnd = active);
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
                 update_dnd_button(&document, active);
+                render_control_center(&document);
             }
+        }
+        IpcMessage::SettingsState {
+            theme,
+            bar,
+            night_light,
+        } => {
+            apply_settings(theme, bar, night_light);
         }
         IpcMessage::CloseWindow { .. } => {}
         IpcMessage::NotificationAction { .. }
@@ -2132,7 +2221,12 @@ fn handle_server_message(text: &str) {
         | IpcMessage::MediaRequest
         | IpcMessage::StatusRequest
         | IpcMessage::VolumeCommand { .. }
-        | IpcMessage::BrightnessCommand { .. } => {}
+        | IpcMessage::BrightnessCommand { .. }
+        | IpcMessage::NetworkSetWifi { .. }
+        | IpcMessage::BluetoothSetEnabled { .. }
+        | IpcMessage::PowerProfileSet { .. }
+        | IpcMessage::SettingsRequest
+        | IpcMessage::SetSetting { .. } => {}
         _ => {}
     }
 }
@@ -2710,26 +2804,29 @@ impl BarConfig {
         let Some(text) = storage.get_item(BAR_KEY).ok().flatten() else {
             return Self::default();
         };
-        let mut config: Self = serde_json::from_str(&text).unwrap_or_default();
+        let config: Self = serde_json::from_str(&text).unwrap_or_default();
+        config.normalize()
+    }
 
-        // Garante todos os módulos conhecidos e descarta ids antigos.
-        config
-            .modules
+    /// Garante todos os módulos conhecidos, descarta ids antigos e corrige
+    /// slots inválidos. Usado tanto no localStorage quanto no settings.json.
+    fn normalize(mut self) -> Self {
+        self.modules
             .retain(|module| BAR_MODULES.iter().any(|(id, _, _)| *id == module.id));
         for (id, _, slot) in BAR_MODULES {
-            if !config.modules.iter().any(|module| module.id == id) {
-                config.modules.push(BarModule {
+            if !self.modules.iter().any(|module| module.id == id) {
+                self.modules.push(BarModule {
                     id: id.to_owned(),
                     slot: slot.to_owned(),
                 });
             }
         }
-        for module in &mut config.modules {
+        for module in &mut self.modules {
             if !matches!(module.slot.as_str(), "left" | "center" | "right" | "hidden") {
                 module.slot = "right".to_owned();
             }
         }
-        config
+        self
     }
 
     fn save(&self, window: &Window) {
@@ -2957,6 +3054,9 @@ fn render_bar_settings(document: &Document, config: &BarConfig) {
 fn persist_bar(config: &BarConfig) {
     if let Some(window) = web_sys::window() {
         config.save(&window);
+    }
+    if let Ok(value) = serde_json::to_value(config) {
+        persist_setting("bar", value);
     }
 }
 
@@ -4385,6 +4485,563 @@ fn render_system(document: &Document) {
             let _ = button.set_attribute("hidden", "");
         }
     }
+}
+
+fn theme_label(theme: CanvasTheme) -> &'static str {
+    match theme {
+        CanvasTheme::Default => "Padrão",
+        CanvasTheme::Minimalist => "Minimalista",
+        CanvasTheme::MinimalistDark => "Minimalista Negro",
+        CanvasTheme::OxidizedIron => "Ferro Oxidado",
+        CanvasTheme::Nord => "Nord",
+    }
+}
+
+thread_local! {
+    /// Handle do `setTimeout` que esconde o OSD.
+    static OSD_TIMEOUT: RefCell<Option<i32>> = const { RefCell::new(None) };
+}
+
+fn setup_control_center(window: &Window, document: &Document) -> Result<(), JsValue> {
+    // Chips de tema (o mesmo `THEMES` da lista da barra).
+    if let Ok(container) = by_id(document, "cc-themes") {
+        let html = THEMES
+            .iter()
+            .map(|theme| {
+                format!(
+                    "<button class=\"theme-chip\" type=\"button\" data-cc-action=\"theme\" data-theme=\"{}\" aria-pressed=\"false\">{}</button>",
+                    theme.as_str(),
+                    theme_label(*theme)
+                )
+            })
+            .collect::<String>();
+        let _ = container.set_inner_html(&html);
+    }
+
+    if let Ok(button) = by_id(document, "control-center-btn") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = is_hidden(&document_for_click, "control-center");
+            close_popover_if_open(&document_for_click, "theme-popover", "theme-menu-btn");
+            close_popover_if_open(&document_for_click, "bar-settings-panel", "bar-settings-btn");
+            close_popover_if_open(&document_for_click, "calendar-popover", "clock-btn");
+            set_control_center(&document_for_click, open);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "control-center-close") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            set_control_center(&document_for_click, false);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Ações dos tiles e dos chips de tema (delegação).
+    if let Ok(panel) = by_id(document, "control-center") {
+        let document_for_click = document.clone();
+        let window_for_click = window.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(action)) = target.closest("[data-cc-action]") else {
+                return;
+            };
+            let action = action.get_attribute("data-cc-action").unwrap_or_default();
+            match action.as_str() {
+                "wifi" => {
+                    let enabled = STATE.with(|state| state.borrow().network_wifi_enabled);
+                    send_message(&IpcMessage::NetworkSetWifi { enabled: !enabled });
+                }
+                "bluetooth" => {
+                    let (available, enabled) = STATE.with(|state| {
+                        let state = state.borrow();
+                        (state.bluetooth_available, state.bluetooth_enabled)
+                    });
+                    if available {
+                        send_message(&IpcMessage::BluetoothSetEnabled { enabled: !enabled });
+                    }
+                }
+                "dnd" => {
+                    let active = STATE.with(|state| {
+                        let mut state = state.borrow_mut();
+                        state.dnd = !state.dnd;
+                        state.dnd
+                    });
+                    update_dnd_button(&document_for_click, active);
+                    send_message(&IpcMessage::DndState { active });
+                    render_control_center(&document_for_click);
+                }
+                "night-light" => {
+                    let enabled = STATE.with(|state| {
+                        let mut state = state.borrow_mut();
+                        state.night_light = !state.night_light;
+                        state.night_light
+                    });
+                    persist_setting("night-light", serde_json::Value::Bool(enabled));
+                    show_toast(
+                        &document_for_click,
+                        "Night light será aplicado no compositor na etapa 11.",
+                    );
+                    render_control_center(&document_for_click);
+                }
+                "power" => {
+                    let next = STATE.with(|state| {
+                        let state = state.borrow();
+                        if state.power_profiles.is_empty() {
+                            return None;
+                        }
+                        let index = state
+                            .power_profiles
+                            .iter()
+                            .position(|profile| *profile == state.power_active)
+                            .map(|index| (index + 1) % state.power_profiles.len())
+                            .unwrap_or(0);
+                        state.power_profiles.get(index).cloned()
+                    });
+                    if let Some(profile) = next {
+                        send_message(&IpcMessage::PowerProfileSet { profile });
+                    }
+                }
+                "theme" => {
+                    let Some(name) = target.get_attribute("data-theme") else {
+                        return;
+                    };
+                    if let Some(theme) = CanvasTheme::from_name(&name) {
+                        let _ = set_theme(&window_for_click, &document_for_click, theme);
+                        render_control_center(&document_for_click);
+                    }
+                }
+                "session" => {
+                    show_toast(&document_for_click, "Menu de sessão chega na etapa 8.");
+                }
+                _ => {}
+            }
+        });
+        panel.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Sliders de volume e brilho.
+    for (id, volume) in [("cc-volume", true), ("cc-brightness", false)] {
+        let Ok(element) = by_id(document, id) else {
+            continue;
+        };
+        let Ok(input) = element.dyn_into::<HtmlInputElement>() else {
+            continue;
+        };
+        let input_for_input = input.clone();
+        let on_input = Closure::<dyn FnMut(Event)>::new(move |_| {
+            let value = input_for_input
+                .value()
+                .parse::<u8>()
+                .unwrap_or(0)
+                .min(100);
+            if volume {
+                send_message(&IpcMessage::VolumeCommand {
+                    action: VolumeAction::Set,
+                    value,
+                });
+            } else {
+                send_message(&IpcMessage::BrightnessCommand {
+                    action: BrightnessAction::Set,
+                    value,
+                });
+            }
+        });
+        input.add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref())?;
+        on_input.forget();
+    }
+
+    if let Ok(button) = by_id(document, "cc-volume-mute") {
+        let click = Closure::<dyn FnMut()>::new(move || {
+            send_message(&IpcMessage::VolumeCommand {
+                action: VolumeAction::Mute,
+                value: 0,
+            });
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Esc fecha; clique fora também. Usa captura para funcionar mesmo quando
+    // o canvas para a propagação do pointerdown.
+    let document_for_key = document.clone();
+    let key = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+        if event.key() != "Escape" || is_hidden(&document_for_key, "control-center") {
+            return;
+        }
+        let editing = document_for_key
+            .active_element()
+            .map(|element| matches!(element.tag_name().as_str(), "INPUT" | "TEXTAREA"))
+            .unwrap_or(false);
+        if editing {
+            return;
+        }
+        set_control_center(&document_for_key, false);
+        event.prevent_default();
+    });
+    document.add_event_listener_with_callback_and_bool(
+        "keydown",
+        key.as_ref().unchecked_ref(),
+        true,
+    )?;
+    key.forget();
+
+    let document_for_outside = document.clone();
+    let outside = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        if is_hidden(&document_for_outside, "control-center") {
+            return;
+        }
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        for selector in ["#control-center", "#control-center-btn"] {
+            if target
+                .closest(selector)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return;
+            }
+        }
+        set_control_center(&document_for_outside, false);
+    });
+    document.add_event_listener_with_callback_and_bool(
+        "pointerdown",
+        outside.as_ref().unchecked_ref(),
+        true,
+    )?;
+    outside.forget();
+
+    request_settings();
+    render_control_center(document);
+    Ok(())
+}
+
+fn set_control_center(document: &Document, open: bool) {
+    if let Some(element) = document.get_element_by_id("control-center") {
+        if open {
+            let _ = element.remove_attribute("hidden");
+        } else {
+            let _ = element.set_attribute("hidden", "");
+        }
+    }
+    if let Some(button) = document.get_element_by_id("control-center-btn") {
+        let _ = button.set_attribute("aria-expanded", if open { "true" } else { "false" });
+    }
+    if open {
+        render_control_center(document);
+    }
+    send_chrome_rects(document);
+}
+
+fn set_tile(document: &Document, id: &str, pressed: bool, sub: &str) {
+    if let Some(element) = document.get_element_by_id(id) {
+        let _ = element.set_attribute("aria-pressed", if pressed { "true" } else { "false" });
+    }
+    if let Some(sub_element) = document.get_element_by_id(&format!("{id}-sub")) {
+        let _ = sub_element.set_text_content(Some(sub));
+    }
+}
+
+fn render_control_center(document: &Document) {
+    let (
+        wifi_enabled,
+        networking_enabled,
+        network_connected,
+        network_ssid,
+        network_strength,
+        bluetooth_available,
+        bluetooth_enabled,
+        bluetooth_name,
+        power_available,
+        power_active,
+        night_light,
+        dnd,
+        volume_available,
+        volume_percent,
+        volume_muted,
+        brightness_available,
+        brightness_percent,
+        theme,
+    ) = STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.network_wifi_enabled,
+            state.network_networking_enabled,
+            state.network_connected,
+            state.network_ssid.clone(),
+            state.network_strength,
+            state.bluetooth_available,
+            state.bluetooth_enabled,
+            state.bluetooth_name.clone(),
+            state.power_available,
+            state.power_active.clone(),
+            state.night_light,
+            state.dnd,
+            state.volume_available,
+            state.volume_percent,
+            state.volume_muted,
+            state.brightness_available,
+            state.brightness_percent,
+            state.theme,
+        )
+    });
+
+    let wifi_sub = if !networking_enabled && !wifi_enabled {
+        "Rede desligada".to_owned()
+    } else if network_connected && !network_ssid.is_empty() {
+        format!("{network_ssid} · {network_strength}%")
+    } else if wifi_enabled {
+        "Sem conexão".to_owned()
+    } else {
+        "Desligado".to_owned()
+    };
+    set_tile(document, "cc-wifi", wifi_enabled, &wifi_sub);
+
+    if let Some(button) = document.get_element_by_id("cc-bluetooth") {
+        if bluetooth_available {
+            let _ = button.remove_attribute("disabled");
+        } else {
+            let _ = button.set_attribute("disabled", "");
+        }
+    }
+    set_tile(
+        document,
+        "cc-bluetooth",
+        bluetooth_enabled,
+        if bluetooth_available {
+            bluetooth_name.as_str()
+        } else {
+            "Sem adaptador"
+        },
+    );
+
+    set_tile(
+        document,
+        "cc-dnd",
+        dnd,
+        if dnd { "Silenciado" } else { "Desligado" },
+    );
+    set_tile(
+        document,
+        "cc-night",
+        night_light,
+        if night_light { "Prévia" } else { "Em breve" },
+    );
+
+    if let Some(button) = document.get_element_by_id("cc-power") {
+        if power_available {
+            let _ = button.remove_attribute("hidden");
+            let label = match power_active.as_str() {
+                "performance" => "Desempenho",
+                "balanced" => "Equilibrado",
+                "power-saver" => "Economia",
+                _ => "Energia",
+            };
+            if let Some(sub) = document.get_element_by_id("cc-power-sub") {
+                let _ = sub.set_text_content(Some(label));
+            }
+            let _ = button.set_attribute("title", "Clique para alternar o perfil de energia");
+        } else {
+            let _ = button.set_attribute("hidden", "");
+        }
+    }
+
+    for (row, available) in [
+        ("cc-volume-row", volume_available),
+        ("cc-brightness-row", brightness_available),
+    ] {
+        if let Some(element) = document.get_element_by_id(row) {
+            if available {
+                let _ = element.remove_attribute("hidden");
+            } else {
+                let _ = element.set_attribute("hidden", "");
+            }
+        }
+    }
+
+    if let Some(element) = document.get_element_by_id("cc-volume") {
+        if let Ok(input) = element.dyn_into::<HtmlInputElement>() {
+            let focused = document
+                .active_element()
+                .map(|active| active.id() == "cc-volume")
+                .unwrap_or(false);
+            if !focused {
+                input.set_value(&format!("{volume_percent}"));
+            }
+        }
+    }
+    if let Some(label) = document.get_element_by_id("cc-volume-label") {
+        let text = if volume_muted {
+            "mudo".to_owned()
+        } else {
+            format!("{volume_percent}%")
+        };
+        let _ = label.set_text_content(Some(&text));
+    }
+    if let Some(button) = document.get_element_by_id("cc-volume-mute") {
+        let _ = button.set_attribute(
+            "aria-pressed",
+            if volume_muted { "true" } else { "false" },
+        );
+    }
+
+    if let Some(element) = document.get_element_by_id("cc-brightness") {
+        if let Ok(input) = element.dyn_into::<HtmlInputElement>() {
+            let focused = document
+                .active_element()
+                .map(|active| active.id() == "cc-brightness")
+                .unwrap_or(false);
+            if !focused {
+                input.set_value(&format!("{brightness_percent}"));
+            }
+        }
+    }
+    if let Some(label) = document.get_element_by_id("cc-brightness-label") {
+        let _ = label.set_text_content(Some(&format!("{brightness_percent}%")));
+    }
+
+    if let Ok(nodes) = document.query_selector_all("[data-cc-action=\"theme\"]") {
+        for index in 0..nodes.length() {
+            let Some(node) = nodes.item(index) else {
+                continue;
+            };
+            let Ok(element) = node.dyn_into::<Element>() else {
+                continue;
+            };
+            let pressed = element.get_attribute("data-theme").as_deref() == Some(theme.as_str());
+            let _ = element.set_attribute("aria-pressed", if pressed { "true" } else { "false" });
+        }
+    }
+}
+
+fn request_settings() {
+    send_message(&IpcMessage::SettingsRequest);
+}
+
+/// Aplica o `SettingsState` vindo dos serviços. `None` numa chave significa
+/// "nunca configurado": aí o valor do localStorage (se houver) é migrado.
+fn apply_settings(
+    theme: Option<String>,
+    bar: Option<serde_json::Value>,
+    night_light: bool,
+) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Some(document) = window.document() else {
+        return;
+    };
+
+    let theme_from_url = STATE.with(|state| state.borrow().theme_from_url);
+    STATE.with(|state| state.borrow_mut().night_light = night_light);
+
+    match bar {
+        Some(value) => {
+            if let Ok(config) = serde_json::from_value::<BarConfig>(value) {
+                let config = config.normalize();
+                STATE.with(|state| state.borrow_mut().bar = config.clone());
+                apply_bar_config(&document, &config);
+                render_bar_settings(&document, &config);
+                config.save(&window);
+            }
+        }
+        None => {
+            // Primeira execução com settings.json: sobe o layout que estava
+            // só no localStorage.
+            let config = STATE.with(|state| state.borrow().bar.clone());
+            persist_bar(&config);
+        }
+    }
+
+    if !theme_from_url {
+        match theme {
+            Some(name) => {
+                if let Some(theme) = CanvasTheme::from_name(&name) {
+                    let _ = apply_theme_to_document(&document, theme);
+                    let _ = draw_grid(&window, &document);
+                    send_message(&IpcMessage::SetTheme { theme });
+                    if let Ok(Some(storage)) = window.local_storage() {
+                        let _ = storage.set_item(THEME_KEY, theme.as_str());
+                    }
+                }
+            }
+            None => {
+                let theme = STATE.with(|state| state.borrow().theme);
+                persist_setting(
+                    "theme",
+                    serde_json::Value::String(theme.as_str().to_owned()),
+                );
+            }
+        }
+    }
+
+    render_control_center(&document);
+}
+
+fn show_osd(document: &Document, kind: &str, percent: u8, muted: bool) {
+    let Some(element) = document.get_element_by_id("osd") else {
+        return;
+    };
+    let _ = element.remove_attribute("hidden");
+    let _ = element.set_attribute("data-kind", kind);
+
+    let icon = if kind == "brightness" {
+        brightness_icon(percent)
+    } else {
+        volume_icon(percent, muted)
+    };
+    if let Some(icon_element) = document.get_element_by_id("osd-icon") {
+        let _ = icon_element.set_inner_html(&icon);
+    }
+    if let Some(fill) = document.get_element_by_id("osd-fill") {
+        let _ = fill.set_attribute("style", &format!("width:{percent}%"));
+    }
+    if let Some(label) = document.get_element_by_id("osd-label") {
+        let text = if muted {
+            "mudo".to_owned()
+        } else {
+            format!("{percent}%")
+        };
+        let _ = label.set_text_content(Some(&text));
+    }
+
+    send_chrome_rects(document);
+
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if let Some(handle) = OSD_TIMEOUT.with(|slot| slot.borrow_mut().take()) {
+        window.clear_timeout_with_handle(handle);
+    }
+    let document_for_timeout = document.clone();
+    let callback = Closure::<dyn FnMut()>::new(move || {
+        if let Some(element) = document_for_timeout.get_element_by_id("osd") {
+            let _ = element.set_attribute("hidden", "");
+        }
+        send_chrome_rects(&document_for_timeout);
+        OSD_TIMEOUT.with(|slot| *slot.borrow_mut() = None);
+    });
+    if let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        callback.as_ref().unchecked_ref(),
+        1600,
+    ) {
+        OSD_TIMEOUT.with(|slot| *slot.borrow_mut() = Some(handle));
+    }
+    callback.forget();
 }
 
 fn set_svg(document: &Document, id: &str, svg: &str) {

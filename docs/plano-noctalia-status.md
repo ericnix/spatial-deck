@@ -410,6 +410,81 @@ Aproveitado para dois ajustes de layout:
 - Depois da correção, `cargo test --workspace` verde e o desktop sobe com a
   nota visível em 100% e a barra sem sobreposição em 1280 px.
 
+## Etapa 7 — Control center + OSD + settings — CONCLUÍDA
+
+### (a) Gaveta + tiles funcionais
+
+- Módulo de barra `control` (ícone de sliders) abre `#control-center`, ancorado
+  à direita; fecha com `Esc`, × ou clique fora (listeners em fase de captura,
+  para funcionar mesmo com o canvas parando a propagação).
+- Tiles com estado real:
+  - **Wi-Fi** — `WirelessEnabled`/`NetworkingEnabled` do NetworkManager,
+    SSID e força; clique liga/desliga (`network_set_wifi`).
+  - **Bluetooth** — `org.bluez.Adapter1.Powered`; sem adaptador o tile fica
+    desabilitado (`bluetooth_state`/`bluetooth_set_enabled`).
+  - **DND** — mesmo `DndState` da barra (persistido no `notifications.json`).
+  - **Night light** — placeholder persistido; gamma fica para a etapa 11.
+  - **Tema** — os cinco chips; grava `set_setting`.
+  - **Energia** — `PowerProfiles` do tuned-ppd/power-profiles-daemon; clique
+    cicla os perfis (`power_profile_state`/`power_profile_set`).
+  - **Sessão** — placeholder até a etapa 8.
+- O painel entra em `ChromeRects`, então fica acima das janelas e recebe
+  cliques.
+
+### (b) Sliders + OSD
+
+- Sliders de volume (com mudo) e brilho mandam `volume_command`/
+  `brightness_command` com `Set`; o de brilho desaparece sem backlight.
+- `shell-services` emite `osd { kind, percent, muted }` a cada mudança de
+  volume/brilho (o primeiro sample não anuncia; `Refresh` também não). O
+  frontend mostra `#osd` por 1,6 s e reenvia `ChromeRects`.
+- Teclas de mídia (`XF86Audio*`, `XF86MonBrightness*`) capturadas no
+  compositor publicam os comandos; no aninhado dependem do foco da janela do
+  deck (o WM hospedeiro pode interceptar).
+
+### (c) Settings persistidos
+
+- `shell-services/src/settings.rs`: `~/.config/spatial-deck/settings.json`
+  com `theme`, `bar` e `night_light`; IPC `settings_request`, `settings_state`
+  e `set_setting { key, value }`.
+- O frontend pede `settings_request` no `onopen`, aplica o que vier, migra o
+  layout antigo do `localStorage` quando a chave ainda é `null` e continua
+  usando o `localStorage` como cache.
+- `?theme=` mantém precedência sobre o arquivo (documentado).
+
+### Evidências (18/11/2026)
+
+A UI foi dirigida de verdade via AT-SPI (`pyatspi`), sem simular eventos:
+
+- Clique em “Central de controle” abriu a gaveta; árvore expôs Wi-Fi
+  “Personal_B80 · 88%”, Bluetooth “Sem adaptador”, DND “Desligado”, Night
+  light “Em breve”, slider de volume, chips de tema e “Energia Economia”.
+- DND: clique → “Silenciado” e `notifications.json` com `"dnd": true`;
+  segundo clique voltou.
+- Night light: clique → “Prévia” e `settings.json` `night_light: true`.
+- Slider de volume: `currentValue = 42` → `wpctl` 0.42 e OSD visível
+  (capturado em `spectacle`; o OSD menor na captura é o nativo do Plasma).
+- Energia: clique → “Equilibrado” e PPD `ActiveProfile = balanced`; depois
+  restaurado para `power-saver` via IPC.
+- Wi-Fi: `network_set_wifi true` (idempotente) sem erro de permissão.
+- Persistência: tema **Nord** + night light ligados; reinício sem `?theme=`
+  restaurou “Tema: Nord” e “Night light Prévia”. Com `?theme=default` o tema
+  voltou a Padrão mesmo com `theme: "nord"` no arquivo (precedência da URL).
+  Configurações restauradas (tema Padrão, night light off, volume 65%,
+  perfil Economia).
+- `cargo test --workspace` verde e `cargo build --workspace` limpo.
+
+### Limitações
+
+- Bluetooth indisponível nesta máquina (unit do BlueZ não sobe): tile
+  desabilitado; o caminho de escrita foi implementado mas não exercitado.
+- Night light é só estado persistido até a etapa 11 (sem gamma).
+- Slider de brilho oculto (sem `/sys/class/backlight`).
+- Teclas de mídia: o WM hospedeiro pode consumi-las antes do deck.
+- Testar Wi-Fi/Bluetooth de verdade (desligar) foi evitado para não derrubar a
+  rede/sessão; validação ficou no caminho D-Bus idempotente e nos logs.
+
 ## Próxima etapa
 
-Etapa 7 — control center, OSD e settings persistidos. Nada iniciado.
+Etapa 8 — session menu (logind), perfis de energia e calculadora do launcher.
+Nada iniciado.
