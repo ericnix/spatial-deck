@@ -114,6 +114,13 @@ enum Gesture {
         items: Vec<SelectedShape>,
         dirty: bool,
     },
+    ResizeImage {
+        element: Element,
+        corner: String,
+        start: (f64, f64, f64, f64),
+        aspect: f64,
+        dirty: bool,
+    },
     Erase {
         dirty: bool,
     },
@@ -265,9 +272,6 @@ fn setup_tool_buttons(document: &Document) -> Result<(), JsValue> {
     attach_action(document, "action-redo", |document| redo(document))?;
     attach_action(document, "action-clear", |document| clear_canvas(document))?;
     attach_action(document, "action-grid", |document| toggle_grid(document))?;
-    attach_action(document, "action-layer", |document| {
-        toggle_image_layer(document)
-    })?;
     Ok(())
 }
 
@@ -581,6 +585,19 @@ fn on_pointer_down(document: &Document, event: &PointerEvent) -> Result<(), JsVa
 
     match tool {
         Tool::Select => {
+            if let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            {
+                if let Ok(Some(handle)) = target.closest("[data-handle]") {
+                    event.prevent_default();
+                    event.stop_propagation();
+                    let id = handle.get_attribute("data-shape-id").unwrap_or_default();
+                    let corner = handle.get_attribute("data-handle").unwrap_or_default();
+                    begin_image_resize(document, &id, &corner, event.pointer_id())?;
+                    return Ok(());
+                }
+            }
             let Some(shape) = shape_from_event(event) else {
                 return Ok(());
             };
@@ -683,6 +700,7 @@ fn on_pointer_move(document: &Document, event: &PointerEvent) -> Result<(), JsVa
     }
 
     let mut moved_selection = false;
+    let mut resized = false;
     STATE.with(|state| {
         let mut state = state.borrow_mut();
         let scale = state.view.scale;
@@ -726,6 +744,50 @@ fn on_pointer_move(document: &Document, event: &PointerEvent) -> Result<(), JsVa
                 let _ = element.set_attribute("rx", &fmt(dx.abs() / 2.0));
                 let _ = element.set_attribute("ry", &fmt(dy.abs() / 2.0));
             }
+            Some(Gesture::ResizeImage {
+                element,
+                corner,
+                start,
+                aspect,
+                dirty,
+            }) => {
+                let (x0, y0, w0, h0) = *start;
+                let from_x = if corner.contains('e') {
+                    world.0 - (x0 + w0)
+                } else {
+                    x0 - world.0
+                };
+                let from_y = if corner.contains('s') {
+                    world.1 - (y0 + h0)
+                } else {
+                    y0 - world.1
+                };
+                let width_from_x = w0 + from_x;
+                let width_from_y = (h0 + from_y) * *aspect;
+                let width = if (width_from_x - w0).abs() >= (width_from_y - w0).abs() {
+                    width_from_x
+                } else {
+                    width_from_y
+                };
+                let width = width.clamp(40.0, 20_000.0);
+                let height = (width / *aspect).max(1.0);
+                let x = if corner.contains('w') {
+                    x0 + w0 - width
+                } else {
+                    x0
+                };
+                let y = if corner.contains('n') {
+                    y0 + h0 - height
+                } else {
+                    y0
+                };
+                let _ = element.set_attribute("x", &fmt(x));
+                let _ = element.set_attribute("y", &fmt(y));
+                let _ = element.set_attribute("width", &fmt(width));
+                let _ = element.set_attribute("height", &fmt(height));
+                *dirty = true;
+                resized = true;
+            }
             Some(Gesture::Move { from, items, dirty }) => {
                 let dx = world.0 - from.0;
                 let dy = world.1 - from.1;
@@ -750,7 +812,7 @@ fn on_pointer_move(document: &Document, event: &PointerEvent) -> Result<(), JsVa
         }
     });
 
-    if moved_selection {
+    if moved_selection || resized {
         update_overlay(document)?;
         crate::web::refresh_chrome_rects(document);
     }
@@ -781,7 +843,9 @@ fn on_pointer_cancel(document: &Document, event: &PointerEvent) -> Result<(), Js
             | Gesture::Ellipse { element, .. } => {
                 let _ = element.remove();
             }
-            Gesture::Move { .. } | Gesture::Erase { .. } => {}
+            Gesture::Move { .. }
+            | Gesture::ResizeImage { .. }
+            | Gesture::Erase { .. } => {}
         }
     }
     update_overlay(document)?;
@@ -838,6 +902,11 @@ fn finish_gesture(document: &Document, gesture: Gesture) -> Result<(), JsValue> 
             }
         }
         Gesture::Move { dirty, .. } => {
+            if dirty {
+                commit_history(document)?;
+            }
+        }
+        Gesture::ResizeImage { dirty, .. } => {
             if dirty {
                 commit_history(document)?;
             }
@@ -1209,7 +1278,70 @@ fn update_overlay(document: &Document) -> Result<(), JsValue> {
         selection.set_attribute("width", &fmt((rect.width() + pad * 2.0).max(1.0)))?;
         selection.set_attribute("height", &fmt((rect.height() + pad * 2.0).max(1.0)))?;
         overlay.append_child(&selection)?;
+
+        if shape.get_attribute("data-kind").as_deref() == Some("image") {
+            let left = rect.left() - layer_rect.left();
+            let top = rect.top() - layer_rect.top();
+            let width = rect.width();
+            let height = rect.height();
+            for (corner, x, y) in [
+                ("nw", left, top),
+                ("ne", left + width, top),
+                ("sw", left, top + height),
+                ("se", left + width, top + height),
+            ] {
+                let handle = document.create_element_ns(Some(SVG_NS), "rect")?;
+                handle.set_attribute("class", "draw-handle")?;
+                handle.set_attribute("data-handle", corner)?;
+                handle.set_attribute("data-shape-id", &id)?;
+                handle.set_attribute("x", &fmt(x - 4.0))?;
+                handle.set_attribute("y", &fmt(y - 4.0))?;
+                handle.set_attribute("width", "8")?;
+                handle.set_attribute("height", "8")?;
+                overlay.append_child(&handle)?;
+            }
+        }
     }
+    Ok(())
+}
+
+/// Inicia o redimensionamento de uma imagem pela alça arrastada.
+fn begin_image_resize(
+    document: &Document,
+    id: &str,
+    corner: &str,
+    pointer_id: i32,
+) -> Result<(), JsValue> {
+    let Some(shape) = find_shape(document, id)? else {
+        return Ok(());
+    };
+    if shape.get_attribute("data-kind").as_deref() != Some("image") {
+        return Ok(());
+    }
+
+    // Incorpora o deslocamento do arrasto (data-tx/ty) para redimensionar em
+    // coordenadas de mundo sem saltos.
+    let x = attr_num(&shape, "x") + attr_num(&shape, "data-tx");
+    let y = attr_num(&shape, "y") + attr_num(&shape, "data-ty");
+    let width = attr_num(&shape, "width").max(1.0);
+    let height = attr_num(&shape, "height").max(1.0);
+    let _ = shape.set_attribute("data-tx", "0");
+    let _ = shape.set_attribute("data-ty", "0");
+    let _ = shape.remove_attribute("transform");
+    let _ = shape.set_attribute("x", &fmt(x));
+    let _ = shape.set_attribute("y", &fmt(y));
+
+    STATE.with(|state| {
+        state.borrow_mut().gesture = Some(Gesture::ResizeImage {
+            element: shape,
+            corner: corner.to_owned(),
+            start: (x, y, width, height),
+            aspect: width / height,
+            dirty: false,
+        });
+    });
+    let layer = by_id(document, "draw-layer")?;
+    let _ = layer.set_pointer_capture(pointer_id);
     Ok(())
 }
 
@@ -1523,39 +1655,109 @@ fn handle_image_files(document: &Document, input: &HtmlInputElement) -> Result<(
     Ok(())
 }
 
-/// Alterna as imagens selecionadas entre "abaixo" e "acima" das janelas.
-pub fn toggle_image_layer(document: &Document) -> Result<(), JsValue> {
+/// Entrada de imagem para o painel de camadas.
+pub struct LayerImage {
+    pub id: String,
+    pub label: String,
+    pub above: bool,
+    pub selected: bool,
+}
+
+/// Imagens do canvas na ordem do DOM (fundo → topo).
+pub fn image_entries(document: &Document) -> Vec<LayerImage> {
     let selected = STATE.with(|state| state.borrow().selected.clone());
-    let mut result: Option<String> = None;
-    for id in &selected {
-        let Some(shape) = find_shape(document, id)? else {
+    let mut entries = Vec::new();
+    let Ok(nodes) = document.query_selector_all("image[data-kind='image']") else {
+        return entries;
+    };
+    for index in 0..nodes.length() {
+        let Some(node) = nodes.item(index) else {
             continue;
         };
-        if shape.get_attribute("data-kind").as_deref() != Some("image") {
+        let Ok(element) = node.dyn_into::<Element>() else {
             continue;
+        };
+        let Some(id) = element.get_attribute("data-shape-id") else {
+            continue;
+        };
+        entries.push(LayerImage {
+            selected: selected.iter().any(|known| known == &id),
+            above: element.get_attribute("data-layer").as_deref() == Some("above"),
+            label: format!("Imagem {}", index + 1),
+            id,
+        });
+    }
+    entries
+}
+
+/// Coloca a imagem acima ou abaixo das janelas.
+pub fn set_image_layer(document: &Document, id: &str, above: bool) -> Result<(), JsValue> {
+    let Some(shape) = find_shape(document, id)? else {
+        return Ok(());
+    };
+    shape.set_attribute("data-layer", if above { "above" } else { "below" })?;
+    crate::web::refresh_chrome_rects(document);
+    show_toast(
+        document,
+        if above {
+            "Imagem acima das janelas."
+        } else {
+            "Imagem abaixo das janelas."
+        },
+    );
+    Ok(())
+}
+
+/// Move a imagem uma posição para frente (`delta > 0`) ou para trás.
+pub fn move_image(document: &Document, id: &str, delta: i32) -> Result<(), JsValue> {
+    let Ok(nodes) = document.query_selector_all("image[data-kind='image']") else {
+        return Ok(());
+    };
+    let mut images: Vec<Element> = Vec::new();
+    for index in 0..nodes.length() {
+        if let Some(node) = nodes.item(index) {
+            if let Ok(element) = node.dyn_into::<Element>() {
+                images.push(element);
+            }
         }
-        let current = shape
-            .get_attribute("data-layer")
-            .unwrap_or_else(|| "below".to_owned());
-        let next = if current == "above" { "below" } else { "above" };
-        shape.set_attribute("data-layer", next)?;
-        result = Some(next.to_owned());
+    }
+    let Some(position) = images
+        .iter()
+        .position(|image| image.get_attribute("data-shape-id").as_deref() == Some(id))
+    else {
+        return Ok(());
+    };
+    let Some(shape) = images.get(position).cloned() else {
+        return Ok(());
+    };
+    let Some(parent) = shape.parent_node() else {
+        return Ok(());
+    };
+
+    if delta < 0 && position > 0 {
+        parent.insert_before(&shape, Some(&images[position - 1]))?;
+    } else if delta > 0 && position + 1 < images.len() {
+        parent.insert_before(&images[position + 1], Some(&shape))?;
+    } else {
+        return Ok(());
     }
 
-    match result {
-        Some(layer) => {
-            show_toast(
-                document,
-                if layer == "above" {
-                    "Imagem acima das janelas."
-                } else {
-                    "Imagem abaixo das janelas."
-                },
-            );
-            crate::web::refresh_chrome_rects(document);
-        }
-        None => show_toast(document, "Selecione uma imagem para mudar de camada."),
+    commit_history(document)?;
+    crate::web::refresh_chrome_rects(document);
+    Ok(())
+}
+
+/// Seleciona uma imagem pelo id (usado pelo painel de camadas).
+pub fn select_image(document: &Document, id: &str) -> Result<(), JsValue> {
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.selected = vec![id.to_owned()];
+        state.tool = Tool::Select;
+    });
+    if let Ok(layer) = by_id(document, "draw-layer") {
+        let _ = layer.set_attribute("data-tool", Tool::Select.as_str());
     }
+    update_overlay(document)?;
     Ok(())
 }
 
@@ -1592,11 +1794,18 @@ pub fn above_image_rects(document: &Document) -> Vec<(f64, f64, f64, f64)> {
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
+        // Selecionada: inclui as alças (4 px para fora) no recorte, senão elas
+        // ficariam atrás das janelas nas imagens da camada "acima".
+        let id = element.get_attribute("data-shape-id").unwrap_or_default();
+        let selected = STATE.with(|state| {
+            state.borrow().selected.iter().any(|known| known == &id)
+        });
+        let pad = if selected { 10.0 } else { 0.0 };
         rects.push((
-            x * scale + offset_x,
-            y * scale + offset_y,
-            w * scale,
-            h * scale,
+            x * scale + offset_x - pad,
+            y * scale + offset_y - pad,
+            w * scale + pad * 2.0,
+            h * scale + pad * 2.0,
         ));
     }
     rects

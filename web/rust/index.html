@@ -226,7 +226,7 @@ screen_y = world_y * scale + offset_y</pre>
         <button id="action-redo" class="tool" type="button" title="Refazer (Ctrl+Shift+Z)" aria-label="Refazer">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h4v4"/><path d="M19 11a7 7 0 1 1-2-5"/></svg>
         </button>
-        <button id="action-layer" class="tool" type="button" title="Imagem selecionada: alternar entre acima e abaixo das janelas" aria-label="Alternar camada da imagem">
+        <button id="action-layer" class="tool" type="button" title="Camadas das janelas e imagens" aria-label="Abrir painel de camadas" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg>
         </button>
         <button id="action-grid" class="tool" type="button" aria-pressed="true" title="Mostrar ou ocultar a grade (G)" aria-label="Mostrar ou ocultar a grade">
@@ -263,6 +263,19 @@ screen_y = world_y * scale + offset_y</pre>
 
   <textarea id="draw-text-editor" class="draw-text-editor" rows="1" spellcheck="false" hidden aria-label="Editar texto do canvas"></textarea>
   <input id="image-input" type="file" accept="image/*" multiple hidden>
+  <section id="layers-panel" class="layers-panel" hidden aria-label="Camadas">
+    <header class="layers-panel__head">
+      <b>Camadas</b>
+      <button id="layers-close" class="panel-btn" type="button" aria-label="Fechar camadas">×</button>
+    </header>
+    <div class="layers-panel__body">
+      <p class="layers-panel__title">Janelas</p>
+      <ul id="layers-windows" class="layers-list"></ul>
+      <p class="layers-panel__title">Imagens</p>
+      <ul id="layers-images" class="layers-list"></ul>
+    </div>
+  </section>
+
   <div id="toast" role="status" aria-live="polite"></div>
 
   <section id="notification-popups" aria-live="polite" aria-label="Notificações"></section>

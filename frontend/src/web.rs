@@ -278,6 +278,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_deck_apps(&window, &document)?;
     setup_notifications(&window, &document)?;
     setup_tray_media(&document)?;
+    setup_layers(&document)?;
     drawing::init(&document)?;
     connect_websocket();
 
@@ -1174,6 +1175,9 @@ fn ensure_card(document: &Document, id: u32, title: &str) {
         ));
         let _ = world.append_child(&element);
         let _ = bind_card(document, id);
+        if !is_hidden(document, "layers-panel") {
+            render_layers_panel(document);
+        }
     }
 
     if title.trim().is_empty() {
@@ -1588,6 +1592,9 @@ fn remove_card(window_id: u32) {
             if let Some(element) = document.get_element_by_id(&format!("card-{window_id}")) {
                 element.remove();
             }
+            if !is_hidden(&document, "layers-panel") {
+                render_layers_panel(&document);
+            }
             let _ = update_glow(&document);
         }
     }
@@ -1610,6 +1617,7 @@ fn send_chrome_rects(document: &Document) {
         "theme-popover",
         "bar-settings-panel",
         "tray-menu",
+        "layers-panel",
     ] {
         let Some(element) = document.get_element_by_id(id) else {
             continue;
@@ -3414,6 +3422,181 @@ fn render_media(document: &Document) {
                 let _ = button.set_attribute("disabled", "");
             }
         }
+    }
+}
+
+
+// ---------------------------------------------------------------------------
+// Painel de camadas (janelas e imagens)
+// ---------------------------------------------------------------------------
+
+fn setup_layers(document: &Document) -> Result<(), JsValue> {
+    if let Ok(button) = by_id(document, "action-layer") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let open = is_hidden(&document_for_click, "layers-panel");
+            set_layers_panel(&document_for_click, open);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "layers-close") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            set_layers_panel(&document_for_click, false);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(panel) = by_id(document, "layers-panel") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-layer-action]") else {
+                return;
+            };
+            let action = button
+                .get_attribute("data-layer-action")
+                .unwrap_or_default();
+            let id = button.get_attribute("data-layer-id").unwrap_or_default();
+            match action.as_str() {
+                "window-raise" => {
+                    if let Ok(window_id) = id.parse::<u32>() {
+                        send_message(&IpcMessage::RaiseWindow { window_id });
+                    }
+                }
+                "window-lower" => {
+                    if let Ok(window_id) = id.parse::<u32>() {
+                        send_message(&IpcMessage::LowerWindow { window_id });
+                    }
+                }
+                "image-select" => {
+                    let _ = drawing::select_image(&document_for_click, &id);
+                    render_layers_panel(&document_for_click);
+                }
+                "image-layer" => {
+                    let above = button.get_attribute("data-above").as_deref() == Some("true");
+                    let _ = drawing::set_image_layer(&document_for_click, &id, !above);
+                    render_layers_panel(&document_for_click);
+                }
+                "image-front" => {
+                    let _ = drawing::move_image(&document_for_click, &id, 1);
+                    render_layers_panel(&document_for_click);
+                }
+                "image-back" => {
+                    let _ = drawing::move_image(&document_for_click, &id, -1);
+                    render_layers_panel(&document_for_click);
+                }
+                _ => {}
+            }
+        });
+        panel.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    let document_for_outside = document.clone();
+    let outside = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        if is_hidden(&document_for_outside, "layers-panel") {
+            return;
+        }
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if target
+            .closest("#layers-panel, #action-layer")
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            return;
+        }
+        set_layers_panel(&document_for_outside, false);
+    });
+    document.add_event_listener_with_callback("pointerdown", outside.as_ref().unchecked_ref())?;
+    outside.forget();
+
+    Ok(())
+}
+
+fn set_layers_panel(document: &Document, open: bool) {
+    if let Some(panel) = document.get_element_by_id("layers-panel") {
+        if open {
+            let _ = panel.remove_attribute("hidden");
+        } else {
+            let _ = panel.set_attribute("hidden", "");
+        }
+    }
+    if let Ok(button) = by_id(document, "action-layer") {
+        let _ = button.set_attribute("aria-expanded", if open { "true" } else { "false" });
+    }
+    if open {
+        render_layers_panel(document);
+    }
+    send_chrome_rects(document);
+}
+
+fn render_layers_panel(document: &Document) {
+    let cards = STATE.with(|state| state.borrow().cards.clone());
+    let mut windows = String::new();
+    for card in cards.iter().filter(|card| card.has_window) {
+        let title = document
+            .get_element_by_id(&format!("card-{}", card.id))
+            .and_then(|element| element.query_selector(".window-card__bar b").ok().flatten())
+            .and_then(|label| label.text_content())
+            .map(|text| text.trim().to_owned())
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| format!("Janela {}", card.id));
+        windows.push_str(&format!(
+            "<li class=\"layers-row\">\
+             <span class=\"layers-row__name\" title=\"{title}\">{title}</span>\
+             <button class=\"region-btn\" type=\"button\" data-layer-action=\"window-lower\" data-layer-id=\"{id}\" title=\"Enviar para trás\">▾</button>\
+             <button class=\"region-btn\" type=\"button\" data-layer-action=\"window-raise\" data-layer-id=\"{id}\" title=\"Trazer para frente\">▴</button>\
+             </li>",
+            title = escape_html(&title),
+            id = card.id,
+        ));
+    }
+    if windows.is_empty() {
+        windows.push_str("<li class=\"layers-empty\">Nenhuma janela real aberta.</li>");
+    }
+    if let Ok(list) = by_id(document, "layers-windows") {
+        let _ = list.set_inner_html(&windows);
+    }
+
+    let images = drawing::image_entries(document);
+    let mut rows = String::new();
+    for image in &images {
+        rows.push_str(&format!(
+            "<li class=\"layers-row\" data-selected=\"{selected}\">\
+             <button class=\"layers-row__name\" type=\"button\" data-layer-action=\"image-select\" data-layer-id=\"{id}\" title=\"Selecionar imagem\">{label}</button>\
+             <span class=\"layers-row__tag\">{tag}</span>\
+             <button class=\"region-btn\" type=\"button\" data-layer-action=\"image-back\" data-layer-id=\"{id}\" title=\"Para trás\">▾</button>\
+             <button class=\"region-btn\" type=\"button\" data-layer-action=\"image-front\" data-layer-id=\"{id}\" title=\"Para frente\">▴</button>\
+             <button class=\"region-btn\" type=\"button\" data-layer-action=\"image-layer\" data-layer-id=\"{id}\" data-above=\"{above}\" title=\"Alternar acima/abaixo das janelas\">{toggle}</button>\
+             </li>",
+            selected = image.selected,
+            id = escape_html(&image.id),
+            label = escape_html(&image.label),
+            tag = if image.above { "acima" } else { "abaixo" },
+            above = image.above,
+            toggle = if image.above { "↓" } else { "↑" },
+        ));
+    }
+    if rows.is_empty() {
+        rows.push_str("<li class=\"layers-empty\">Nenhuma imagem no canvas.</li>");
+    }
+    if let Ok(list) = by_id(document, "layers-images") {
+        let _ = list.set_inner_html(&rows);
     }
 }
 

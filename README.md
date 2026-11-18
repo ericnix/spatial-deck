@@ -373,13 +373,23 @@ barra de título para trazer a janela para frente ou enviá-la para trás
 (`raise_window` / `lower_window`); clicar numa janela também a sobe. Foco,
 maximizado e diálogos têm faixas de Z próprias.
 
-Imagens podem ficar **abaixo** (padrão) ou **acima** das janelas. Com uma
-imagem selecionada, o botão de camadas do deck alterna entre as duas. Imagens
-"acima" entram em `ChromeRects` (um retângulo por imagem, atualizado durante
-pan/zoom) e o compositor redesenha aquele recorte do shell por cima das
-janelas reais — o HUD e o deck continuam acima delas. Como o recorte é da
-superfície do shell, áreas transparentes da imagem mostram o canvas, não a
-janela atrás.
+O botão de **Camadas** no deck abre um painel único com:
+
+- **Janelas**: título e botões ▴/▾ para mudar a ordem de empilhamento;
+- **Imagens**: nome, camada atual (`acima`/`abaixo`), ▴/▾ para reordenar entre
+  as imagens, botão para alternar a camada e o nome como atalho para
+  selecionar a imagem.
+
+Imagens "acima" entram em `ChromeRects` (um retângulo por imagem, atualizado
+durante pan/zoom, com margem extra quando selecionadas) e o compositor
+redesenha aquele recorte do shell por cima das janelas reais — o HUD e o deck
+continuam acima delas. Como o recorte é da superfície do shell, áreas
+transparentes da imagem mostram o canvas, não a janela atrás.
+
+Com a ferramenta de seleção, uma imagem selecionada mostra **alças nos quatro
+cantos**: arraste para redimensionar mantendo a proporção. O deslocamento do
+arrasto (`data-tx/ty`) é incorporado ao iniciar o resize, então a imagem não
+salta.
 
 ### XWayland
 

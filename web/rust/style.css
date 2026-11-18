@@ -1281,6 +1281,94 @@ html.panning * {
 .media__text b { color: var(--ink); font-size: 11px; }
 .media__text span { color: var(--muted); font-size: 10px; }
 
+
+/* ------------------------------------------------------- camadas */
+
+.draw-handle {
+  fill: #ffffff;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  pointer-events: all;
+}
+.draw-handle[data-handle="nw"],
+.draw-handle[data-handle="se"] { cursor: nwse-resize; }
+.draw-handle[data-handle="ne"],
+.draw-handle[data-handle="sw"] { cursor: nesw-resize; }
+
+.layers-panel {
+  position: fixed;
+  right: 24px;
+  bottom: 104px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  width: 330px;
+  max-height: 55vh;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--popover-bg);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, .38);
+  overflow: hidden;
+}
+
+.layers-panel[hidden] { display: none; }
+
+.layers-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  letter-spacing: .04em;
+}
+.layers-panel__head b { flex: 1; }
+
+.layers-panel__body { padding: 6px; overflow-y: auto; }
+
+.layers-panel__title {
+  margin: 8px 6px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.layers-list { margin: 0; padding: 0; list-style: none; }
+
+.layers-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+.layers-row:hover { background: var(--chip-bg); }
+.layers-row[data-selected="true"] { background: var(--chip-bg-hover); }
+
+.layers-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.layers-row__name:hover { color: var(--accent); }
+
+.layers-row__tag { color: var(--muted); font-size: 10px; white-space: nowrap; }
+
+.layers-row .region-btn { min-width: 22px; height: 22px; font-size: 10px; }
+
+.layers-empty { margin: 4px 8px 6px; color: var(--muted); font-size: 11px; }
+
 /* ------------------------------------------------------- notificações */
 
 #notification-popups {

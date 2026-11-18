@@ -280,6 +280,19 @@ abrir (WebKit exige gesto), então a validação visual do diálogo ficou manual
 Limitação: o recorte da imagem "acima" vem da superfície do shell, então
 transparência mostra o canvas (não a janela atrás).
 
+## Ajuste — redimensionar imagens e painel de camadas — CONCLUÍDO
+
+- **Alças de redimensionamento** nas imagens selecionadas (quatro cantos,
+  proporção preservada, mínimo de 40 px). O deslocamento de arrasto é
+  incorporado antes do resize e o histórico/recorte chrome são atualizados.
+- **Painel "Camadas"** no deck, listando janelas reais (título + ▴/▾ via
+  `raise_window`/`lower_window`) e imagens (camada atual, alternar
+  acima/abaixo, reordenar entre imagens e selecionar pelo nome).
+- Imagens "acima" selecionadas têm o recorte do chrome expandido em 10 px para
+  que as alças continuem visíveis e clicáveis sobre janelas.
+- Validado visualmente com duas imagens sintéticas (uma `abaixo`, uma `acima`),
+  alças visíveis e painel com as duas linhas; `cargo test --workspace` verde.
+
 ## Próxima etapa
 
 Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.
