@@ -191,6 +191,72 @@ pub enum IpcMessage {
 
     /// Pedido do shell para receber o estado atual do player.
     MediaRequest,
+
+    /// Pedido único do shell para receber rede, bateria, volume e brilho.
+    StatusRequest,
+
+    /// Estado da rede (NetworkManager).
+    NetworkState {
+        connected: bool,
+        /// `wifi`, `ethernet`, `vpn`, `bridge`, `other` ou `offline`.
+        kind: String,
+        ssid: String,
+        /// 0–100 (0 quando não se aplica).
+        strength: u8,
+    },
+
+    /// Estado da bateria (UPower `DisplayDevice`).
+    BatteryState {
+        present: bool,
+        percent: u8,
+        charging: bool,
+        /// Minutos restantes (0 quando desconhecido/carregando).
+        time_left: u32,
+    },
+
+    /// Volume do sink padrão.
+    VolumeState {
+        available: bool,
+        percent: u8,
+        muted: bool,
+    },
+
+    /// Brilho do backlight.
+    BrightnessState {
+        available: bool,
+        percent: u8,
+    },
+
+    /// Comando de volume (mudo, +/-5% ou valor absoluto).
+    VolumeCommand {
+        action: VolumeAction,
+        value: u8,
+    },
+
+    /// Comando de brilho.
+    BrightnessCommand {
+        action: BrightnessAction,
+        value: u8,
+    },
+}
+
+/// Ações de volume aceitas pelo `shell-services`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VolumeAction {
+    Up,
+    Down,
+    Mute,
+    Set,
+}
+
+/// Ações de brilho aceitas pelo `shell-services`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrightnessAction {
+    Up,
+    Down,
+    Set,
 }
 
 /// Item da bandeja do sistema (StatusNotifierItem).
@@ -845,6 +911,67 @@ mod tests {
         let json = refresh.to_json().unwrap();
         assert!(json.contains("\"type\":\"media_request\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), refresh);
+    }
+
+    #[test]
+    fn system_messages_round_trip() {
+        let network = IpcMessage::NetworkState {
+            connected: true,
+            kind: "wifi".into(),
+            ssid: "Casa".into(),
+            strength: 78,
+        };
+        let json = network.to_json().unwrap();
+        assert!(json.contains("\"type\":\"network_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), network);
+
+        let battery = IpcMessage::BatteryState {
+            present: true,
+            percent: 85,
+            charging: false,
+            time_left: 120,
+        };
+        let json = battery.to_json().unwrap();
+        assert!(json.contains("\"type\":\"battery_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), battery);
+
+        let volume = IpcMessage::VolumeState {
+            available: true,
+            percent: 70,
+            muted: false,
+        };
+        let json = volume.to_json().unwrap();
+        assert!(json.contains("\"type\":\"volume_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), volume);
+
+        let brightness = IpcMessage::BrightnessState {
+            available: false,
+            percent: 0,
+        };
+        let json = brightness.to_json().unwrap();
+        assert!(json.contains("\"type\":\"brightness_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), brightness);
+
+        let command = IpcMessage::VolumeCommand {
+            action: VolumeAction::Set,
+            value: 40,
+        };
+        let json = command.to_json().unwrap();
+        assert!(json.contains("\"action\":\"set\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), command);
+
+        let command = IpcMessage::BrightnessCommand {
+            action: BrightnessAction::Down,
+            value: 0,
+        };
+        let json = command.to_json().unwrap();
+        assert!(json.contains("\"type\":\"brightness_command\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), command);
+
+        let request = IpcMessage::StatusRequest;
+        let json = request.to_json().unwrap();
+        assert!(json.contains("\"type\":\"status_request\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
     }
 
     #[test]

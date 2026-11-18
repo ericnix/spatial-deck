@@ -1876,7 +1876,14 @@ impl App {
             | IpcMessage::TrayMenuEvent { .. }
             | IpcMessage::MediaState { .. }
             | IpcMessage::MediaCommand { .. }
-            | IpcMessage::MediaRequest => {
+            | IpcMessage::MediaRequest
+            | IpcMessage::StatusRequest
+            | IpcMessage::NetworkState { .. }
+            | IpcMessage::BatteryState { .. }
+            | IpcMessage::VolumeState { .. }
+            | IpcMessage::BrightnessState { .. }
+            | IpcMessage::VolumeCommand { .. }
+            | IpcMessage::BrightnessCommand { .. } => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.

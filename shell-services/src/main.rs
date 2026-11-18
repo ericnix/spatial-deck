@@ -12,6 +12,7 @@ mod dbus;
 mod ipc;
 mod media;
 mod regions;
+mod system;
 mod store;
 mod tray;
 
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
 
     let (tray_tx, tray_rx) = mpsc::channel(16);
     let (media_tx, media_rx) = mpsc::channel(16);
+    let (system_tx, system_rx) = mpsc::channel(16);
     {
         let connection = connection.clone();
         let ipc = ipc_tx.clone();
@@ -72,6 +74,12 @@ async fn main() -> anyhow::Result<()> {
         let ipc = ipc_tx.clone();
         tokio::spawn(async move {
             media::run(connection, ipc, media_rx).await;
+        });
+    }
+    {
+        let ipc = ipc_tx.clone();
+        tokio::spawn(async move {
+            system::run(ipc, system_rx).await;
         });
     }
 
@@ -94,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
                     &emitter,
                     &tray_tx,
                     &media_tx,
+                    &system_tx,
                 )
                 .await;
             }
@@ -129,6 +138,7 @@ async fn handle(
     emitter: &SignalEmitter<'static>,
     tray: &mpsc::Sender<tray::TrayCommand>,
     media: &mpsc::Sender<media::MediaCommand>,
+    system: &mpsc::Sender<system::SystemCommand>,
 ) {
     match message {
         // O compositor manda AppList ao aceitar a conexão; o pedido explícito
@@ -186,6 +196,25 @@ async fn handle(
         }
         IpcMessage::MediaRequest => {
             let _ = media.send(media::MediaCommand::Refresh).await;
+        }
+        IpcMessage::StatusRequest => {
+            let _ = system.send(system::SystemCommand::Refresh).await;
+        }
+        IpcMessage::VolumeCommand { action, value } => {
+            let _ = system
+                .send(system::SystemCommand::Volume { action, value })
+                .await;
+        }
+        IpcMessage::BrightnessCommand { action, value } => {
+            let _ = system
+                .send(system::SystemCommand::Brightness { action, value })
+                .await;
+        }
+        IpcMessage::NetworkState { .. }
+        | IpcMessage::BatteryState { .. }
+        | IpcMessage::VolumeState { .. }
+        | IpcMessage::BrightnessState { .. } => {
+            // Estados produzidos pelos próprios serviços.
         }
         IpcMessage::TrayUpdate { .. }
         | IpcMessage::TrayMenu { .. }

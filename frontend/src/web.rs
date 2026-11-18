@@ -17,8 +17,9 @@ use std::{
 
 use common::{
     fuzzy_score, push_recent, toggle_favorite, CanvasRegion, CanvasTheme, CanvasZoom, ChromeRect,
-    ClusterPlacement, DesktopApp, IpcMessage, MediaAction, NotificationButton, NotificationItem,
-    TrayItem, TrayMenuEntry, NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
+    BrightnessAction, ClusterPlacement, DesktopApp, IpcMessage, MediaAction,
+    NotificationButton, NotificationItem, TrayItem, TrayMenuEntry, VolumeAction,
+    NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
 };
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
@@ -46,7 +47,7 @@ const NOTE_H: f64 = 280.0;
 const BAR_KEY: &str = "spatial-deck.bar";
 
 /// Módulos da barra: id, rótulo e slot padrão.
-const BAR_MODULES: [(&str, &str, &str); 9] = [
+const BAR_MODULES: [(&str, &str, &str); 13] = [
     ("regions", "Regiões", "left"),
     ("clock", "Relógio", "center"),
     ("media", "Mídia", "center"),
@@ -54,6 +55,10 @@ const BAR_MODULES: [(&str, &str, &str); 9] = [
     ("themes", "Temas", "right"),
     ("zoom", "Zoom", "right"),
     ("tray", "Bandeja", "right"),
+    ("network", "Rede", "right"),
+    ("battery", "Bateria", "right"),
+    ("volume", "Volume", "right"),
+    ("brightness", "Brilho", "right"),
     ("notifications", "Notificações", "right"),
     ("overview", "Visão geral", "right"),
 ];
@@ -156,6 +161,16 @@ struct NoteData {
     text: String,
     #[serde(default = "default_note_color")]
     color: String,
+    #[serde(default = "default_note_font")]
+    font_size: f64,
+    #[serde(default)]
+    bold: bool,
+    #[serde(default)]
+    italic: bool,
+}
+
+fn default_note_font() -> f64 {
+    13.0
 }
 
 fn default_note_color() -> String {
@@ -242,6 +257,19 @@ struct State {
     media_status: String,
     media_can_next: bool,
     media_can_prev: bool,
+    network_connected: bool,
+    network_kind: String,
+    network_ssid: String,
+    network_strength: u8,
+    battery_present: bool,
+    battery_percent: u8,
+    battery_charging: bool,
+    battery_time_left: u32,
+    volume_available: bool,
+    volume_percent: u8,
+    volume_muted: bool,
+    brightness_available: bool,
+    brightness_percent: u8,
 }
 
 impl Default for State {
@@ -284,6 +312,19 @@ impl Default for State {
             media_status: String::new(),
             media_can_next: false,
             media_can_prev: false,
+            network_connected: false,
+            network_kind: String::new(),
+            network_ssid: String::new(),
+            network_strength: 0,
+            battery_present: false,
+            battery_percent: 0,
+            battery_charging: false,
+            battery_time_left: 0,
+            volume_available: false,
+            volume_percent: 0,
+            volume_muted: false,
+            brightness_available: false,
+            brightness_percent: 0,
         }
     }
 }
@@ -317,6 +358,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_deck_apps(&window, &document)?;
     setup_notifications(&window, &document)?;
     setup_tray_media(&document)?;
+    setup_system(&document)?;
     setup_layers(&document)?;
     drawing::init(&document)?;
     connect_websocket();
@@ -1563,6 +1605,7 @@ fn connect_websocket() {
         send_message(&IpcMessage::RegionListRequest);
         send_message(&IpcMessage::TrayRequest);
         send_message(&IpcMessage::MediaRequest);
+        send_message(&IpcMessage::StatusRequest);
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             send_chrome_rects(&document);
         }
@@ -1933,6 +1976,65 @@ fn handle_server_message(text: &str) {
                 render_media(&document);
             }
         }
+        IpcMessage::NetworkState {
+            connected,
+            kind,
+            ssid,
+            strength,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.network_connected = connected;
+                state.network_kind = kind;
+                state.network_ssid = ssid;
+                state.network_strength = strength;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_system(&document);
+            }
+        }
+        IpcMessage::BatteryState {
+            present,
+            percent,
+            charging,
+            time_left,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.battery_present = present;
+                state.battery_percent = percent;
+                state.battery_charging = charging;
+                state.battery_time_left = time_left;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_system(&document);
+            }
+        }
+        IpcMessage::VolumeState {
+            available,
+            percent,
+            muted,
+        } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.volume_available = available;
+                state.volume_percent = percent;
+                state.volume_muted = muted;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_system(&document);
+            }
+        }
+        IpcMessage::BrightnessState { available, percent } => {
+            STATE.with(|state| {
+                let mut state = state.borrow_mut();
+                state.brightness_available = available;
+                state.brightness_percent = percent;
+            });
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                render_system(&document);
+            }
+        }
         IpcMessage::DndState { active } => {
             STATE.with(|state| state.borrow_mut().dnd = active);
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
@@ -1952,7 +2054,10 @@ fn handle_server_message(text: &str) {
         | IpcMessage::TrayRequest
         | IpcMessage::TrayMenuEvent { .. }
         | IpcMessage::MediaCommand { .. }
-        | IpcMessage::MediaRequest => {}
+        | IpcMessage::MediaRequest
+        | IpcMessage::StatusRequest
+        | IpcMessage::VolumeCommand { .. }
+        | IpcMessage::BrightnessCommand { .. } => {}
         _ => {}
     }
 }
@@ -3566,6 +3671,9 @@ fn create_note(document: &Document) {
         h: NOTE_H,
         text: String::new(),
         color: default_note_color(),
+        font_size: default_note_font(),
+        bold: false,
+        italic: false,
     };
     if spawn_note(document, note).is_ok() {
         save_notes(document);
@@ -3581,6 +3689,9 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
     article.set_attribute("data-window-id", &note.id.to_string())?;
     article.set_attribute("data-note", "1")?;
     article.set_attribute("data-color", &note.color)?;
+    article.set_attribute("data-font-size", &format!("{}", note.font_size))?;
+    article.set_attribute("data-bold", if note.bold { "1" } else { "0" })?;
+    article.set_attribute("data-italic", if note.italic { "1" } else { "0" })?;
     article.set_attribute(
         "style",
         &format!(
@@ -3591,6 +3702,10 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
     article.set_inner_html(&format!(
         "<div class=\"window-card__bar\"><span class=\"dots\"><i></i><i></i><i></i></span>\
          <b>nota</b><span class=\"window-card__id\">{}</span>\
+         <button class=\"window-card__fmt\" type=\"button\" data-note-fmt=\"smaller\" title=\"Diminuir letra\">A−</button>\
+         <button class=\"window-card__fmt\" type=\"button\" data-note-fmt=\"larger\" title=\"Aumentar letra\">A+</button>\
+         <button class=\"window-card__fmt\" type=\"button\" data-note-fmt=\"bold\" title=\"Negrito\">B</button>\
+         <button class=\"window-card__fmt\" type=\"button\" data-note-fmt=\"italic\" title=\"Itálico\">I</button>\
          <button class=\"window-card__color\" type=\"button\" data-note-color title=\"Cor da nota\" aria-label=\"Cor da nota\"></button>\
          <button class=\"window-card__close\" type=\"button\" aria-label=\"Fechar nota\">×</button>\
          </div><div class=\"window-card__body note-card__body\">\
@@ -3617,6 +3732,7 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
 
     bind_card(document, note.id)?;
     bind_note_controls(document, note.id, &article)?;
+    apply_note_formatting(&article);
 
     if let Ok(Some(node)) = article.query_selector("[data-note-input]") {
         if let Ok(input) = node.dyn_into::<HtmlTextAreaElement>() {
@@ -3635,12 +3751,88 @@ fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
 
 const NOTE_COLORS: [&str; 5] = ["default", "yellow", "green", "blue", "pink"];
 
+/// Aplica tamanho/negrito/itálico da nota ao textarea (estilo inline para
+/// vencer o CSS base sem precisar de uma classe por tamanho).
+fn apply_note_formatting(article: &Element) {
+    let size = article
+        .get_attribute("data-font-size")
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or_else(default_note_font);
+    let bold = article.get_attribute("data-bold").as_deref() == Some("1");
+    let italic = article.get_attribute("data-italic").as_deref() == Some("1");
+
+    if let Ok(Some(node)) = article.query_selector("[data-note-input]") {
+        if let Ok(input) = node.dyn_into::<HtmlTextAreaElement>() {
+            let _ = input.set_attribute(
+                "style",
+                &format!(
+                    "font-size:{size}px;font-weight:{};font-style:{};",
+                    if bold { "700" } else { "400" },
+                    if italic { "italic" } else { "normal" },
+                ),
+            );
+        }
+    }
+    for (value, pressed) in [("bold", bold), ("italic", italic)] {
+        if let Ok(Some(button)) = article.query_selector(&format!("[data-note-fmt=\"{value}\"]")) {
+            let _ = button.set_attribute("aria-pressed", if pressed { "true" } else { "false" });
+        }
+    }
+}
+
 /// Liga o botão de cor e as alças de redimensionamento de uma nota.
 fn bind_note_controls(
     document: &Document,
     card_id: u32,
     article: &Element,
 ) -> Result<(), JsValue> {
+    // Formatação: A−/A+/B/I.
+    if let Ok(Some(toolbar)) = article.query_selector(".window-card__bar") {
+        let document_for_fmt = document.clone();
+        let article_for_fmt = article.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(button)) = target.closest("[data-note-fmt]") else {
+                return;
+            };
+            event.stop_propagation();
+            event.prevent_default();
+            let action = button.get_attribute("data-note-fmt").unwrap_or_default();
+            let size = article_for_fmt
+                .get_attribute("data-font-size")
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or_else(default_note_font);
+            match action.as_str() {
+                "smaller" => {
+                    let _ = article_for_fmt
+                        .set_attribute("data-font-size", &format!("{}", (size - 1.0).clamp(10.0, 28.0)));
+                }
+                "larger" => {
+                    let _ = article_for_fmt
+                        .set_attribute("data-font-size", &format!("{}", (size + 1.0).clamp(10.0, 28.0)));
+                }
+                "bold" => {
+                    let bold = article_for_fmt.get_attribute("data-bold").as_deref() == Some("1");
+                    let _ = article_for_fmt.set_attribute("data-bold", if bold { "0" } else { "1" });
+                }
+                "italic" => {
+                    let italic = article_for_fmt.get_attribute("data-italic").as_deref() == Some("1");
+                    let _ = article_for_fmt.set_attribute("data-italic", if italic { "0" } else { "1" });
+                }
+                _ => {}
+            }
+            apply_note_formatting(&article_for_fmt);
+            save_notes(&document_for_fmt);
+        });
+        toolbar.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
     if let Ok(Some(button)) = article.query_selector("[data-note-color]") {
         let document_for_click = document.clone();
         let article_for_click = article.clone();
@@ -3862,6 +4054,12 @@ fn save_notes(document: &Document) {
             color: element
                 .get_attribute("data-color")
                 .unwrap_or_else(default_note_color),
+            font_size: element
+                .get_attribute("data-font-size")
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or_else(default_note_font),
+            bold: element.get_attribute("data-bold").as_deref() == Some("1"),
+            italic: element.get_attribute("data-italic").as_deref() == Some("1"),
         });
     }
 
@@ -3872,6 +4070,308 @@ fn save_notes(document: &Document) {
             }
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Estado do sistema (rede, bateria, volume e brilho)
+// ---------------------------------------------------------------------------
+
+fn setup_system(document: &Document) -> Result<(), JsValue> {
+    if let Ok(button) = by_id(document, "volume-btn") {
+        let click = Closure::<dyn FnMut()>::new(move || {
+            send_message(&IpcMessage::VolumeCommand {
+                action: VolumeAction::Mute,
+                value: 0,
+            });
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+
+        let wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |event: WheelEvent| {
+            event.prevent_default();
+            let action = if event.delta_y() < 0.0 {
+                VolumeAction::Up
+            } else {
+                VolumeAction::Down
+            };
+            send_message(&IpcMessage::VolumeCommand { action, value: 0 });
+        });
+        button.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
+        wheel.forget();
+    }
+
+    if let Ok(button) = by_id(document, "brightness-btn") {
+        let wheel = Closure::<dyn FnMut(WheelEvent)>::new(move |event: WheelEvent| {
+            event.prevent_default();
+            let action = if event.delta_y() < 0.0 {
+                BrightnessAction::Up
+            } else {
+                BrightnessAction::Down
+            };
+            send_message(&IpcMessage::BrightnessCommand { action, value: 0 });
+        });
+        button.add_event_listener_with_callback("wheel", wheel.as_ref().unchecked_ref())?;
+        wheel.forget();
+    }
+
+    if let Ok(button) = by_id(document, "network-btn") {
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let (connected, kind, ssid, strength) = system_snapshot();
+            let text = if connected {
+                let label = match kind.as_str() {
+                    "wifi" => "Wi-Fi",
+                    "ethernet" => "Cabo",
+                    "vpn" => "VPN",
+                    "bridge" => "Bridge",
+                    _ => "Rede",
+                };
+                if ssid.is_empty() {
+                    format!("{label} conectado")
+                } else {
+                    format!("{label}: {ssid} ({strength}%)")
+                }
+            } else {
+                "Sem conexão".to_owned()
+            };
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                show_toast(&document, &text);
+            }
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "battery-btn") {
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let (percent, charging, minutes) = battery_snapshot();
+            let text = if charging {
+                format!("Bateria: {percent}% (carregando)")
+            } else if minutes > 0 {
+                format!("Bateria: {percent}% — {}h{:02}", minutes / 60, minutes % 60)
+            } else {
+                format!("Bateria: {percent}%")
+            };
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                show_toast(&document, &text);
+            }
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    render_system(document);
+    Ok(())
+}
+
+fn system_snapshot() -> (bool, String, String, u8) {
+    STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.network_connected,
+            state.network_kind.clone(),
+            state.network_ssid.clone(),
+            state.network_strength,
+        )
+    })
+}
+
+fn battery_snapshot() -> (u8, bool, u32) {
+    STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.battery_percent,
+            state.battery_charging,
+            state.battery_time_left,
+        )
+    })
+}
+
+fn render_system(document: &Document) {
+    let (
+        network_connected,
+        network_kind,
+        network_strength,
+        battery_present,
+        battery_percent,
+        battery_charging,
+        battery_time_left,
+        volume_available,
+        volume_percent,
+        volume_muted,
+        brightness_available,
+        brightness_percent,
+    ) = STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.network_connected,
+            state.network_kind.clone(),
+            state.network_strength,
+            state.battery_present,
+            state.battery_percent,
+            state.battery_charging,
+            state.battery_time_left,
+            state.volume_available,
+            state.volume_percent,
+            state.volume_muted,
+            state.brightness_available,
+            state.brightness_percent,
+        )
+    });
+
+    if let Ok(button) = by_id(document, "network-btn") {
+        let _ = button.remove_attribute("hidden");
+        let title = if network_connected {
+            let label = match network_kind.as_str() {
+                "wifi" => "Wi-Fi",
+                "ethernet" => "Cabo",
+                "vpn" => "VPN",
+                "bridge" => "Bridge",
+                _ => "Rede",
+            };
+            format!("{label} — {}%", network_strength)
+        } else {
+            "Sem conexão".to_owned()
+        };
+        let _ = button.set_attribute("title", &title);
+        set_svg(&document, "network-icon", &network_icon(network_connected, &network_kind, network_strength));
+    }
+
+    if let Ok(button) = by_id(document, "battery-btn") {
+        if battery_present {
+            let _ = button.remove_attribute("hidden");
+            let title = if battery_charging {
+                format!("Bateria: {battery_percent}% (carregando)")
+            } else if battery_time_left > 0 {
+                format!(
+                    "Bateria: {battery_percent}% — {}h{:02}",
+                    battery_time_left / 60,
+                    battery_time_left % 60
+                )
+            } else {
+                format!("Bateria: {battery_percent}%")
+            };
+            let _ = button.set_attribute("title", &title);
+            set_text(document, "battery-label", &format!("{battery_percent}%"));
+            set_svg(
+                &document,
+                "battery-icon",
+                &battery_icon(battery_percent, battery_charging),
+            );
+        } else {
+            let _ = button.set_attribute("hidden", "");
+        }
+    }
+
+    if let Ok(button) = by_id(document, "volume-btn") {
+        if volume_available {
+            let _ = button.remove_attribute("hidden");
+            let _ = button.set_attribute(
+                "title",
+                if volume_muted {
+                    "Volume mudo (clique para ativar, roda para ajustar)"
+                } else {
+                    "Volume (clique para mudo, roda para ajustar)"
+                },
+            );
+            let _ = button.set_attribute("data-muted", if volume_muted { "true" } else { "false" });
+            set_text(
+                document,
+                "volume-label",
+                &if volume_muted {
+                    "mudo".to_owned()
+                } else {
+                    format!("{volume_percent}%")
+                },
+            );
+            set_svg(
+                &document,
+                "volume-icon",
+                &volume_icon(volume_percent, volume_muted),
+            );
+        } else {
+            let _ = button.set_attribute("hidden", "");
+        }
+    }
+
+    if let Ok(button) = by_id(document, "brightness-btn") {
+        if brightness_available {
+            let _ = button.remove_attribute("hidden");
+            let _ = button.set_attribute("title", "Brilho (roda para ajustar)");
+            set_text(document, "brightness-label", &format!("{brightness_percent}%"));
+            set_svg(&document, "brightness-icon", &brightness_icon(brightness_percent));
+        } else {
+            let _ = button.set_attribute("hidden", "");
+        }
+    }
+}
+
+fn set_svg(document: &Document, id: &str, svg: &str) {
+    if let Ok(element) = by_id(document, id) {
+        let _ = element.set_inner_html(svg);
+    }
+}
+
+fn network_icon(connected: bool, kind: &str, strength: u8) -> String {
+    let open = "<svg viewBox=\"0 0 24 24\">";
+    if !connected || kind == "offline" {
+        return format!(
+            "{open}<path d=\"M3 9a15 15 0 0 1 18 0\"/><path d=\"M6.5 12.5a10 10 0 0 1 11 0\"/><path d=\"M10 16a4 4 0 0 1 4 0\"/><circle cx=\"12\" cy=\"19\" r=\"1\"/><path d=\"M4 4l16 16\"/></svg>"
+        );
+    }
+    if kind == "ethernet" {
+        return format!(
+            "{open}<rect x=\"3\" y=\"7\" width=\"18\" height=\"10\" rx=\"2\"/><path d=\"M8 21h8M12 17v4\"/></svg>"
+        );
+    }
+    // Wi-Fi: 1 a 3 arcos conforme a força.
+    let mut svg = format!("{open}<path d=\"M3 9a15 15 0 0 1 18 0\"/>");
+    if strength > 20 {
+        svg.push_str("<path d=\"M6.5 12.5a10 10 0 0 1 11 0\"/>");
+    }
+    if strength > 55 {
+        svg.push_str("<path d=\"M10 16a4 4 0 0 1 4 0\"/>");
+    }
+    svg.push_str("<circle cx=\"12\" cy=\"19\" r=\"1\"/></svg>");
+    svg
+}
+
+fn battery_icon(percent: u8, charging: bool) -> String {
+    let fill = 2.0 + (13.0 * percent.min(100) as f64 / 100.0);
+    let bolt = if charging {
+        "<path d=\"M13 9l-3 4h3l-1 4\" />"
+    } else {
+        ""
+    };
+    format!(
+        "<svg viewBox=\"0 0 24 24\"><rect x=\"3\" y=\"8\" width=\"17\" height=\"9\" rx=\"2\"/><path d=\"M22 11v3\"/><rect x=\"5\" y=\"10\" width=\"{fill}\" height=\"5\" fill=\"currentColor\" stroke=\"none\"/>{bolt}</svg>"
+    )
+}
+
+fn volume_icon(percent: u8, muted: bool) -> String {
+    let open = "<svg viewBox=\"0 0 24 24\"><path d=\"M4 10v4h4l5 4V6l-5 4H4z\"/>";
+    if muted {
+        return format!("{open}<path d=\"M16 9l5 6M21 9l-5 6\"/></svg>");
+    }
+    let waves = if percent > 55 {
+        "<path d=\"M16 8a6 6 0 0 1 0 8\"/><path d=\"M18.5 5.5a10 10 0 0 1 0 13\"/>"
+    } else if percent > 5 {
+        "<path d=\"M16 8a6 6 0 0 1 0 8\"/>"
+    } else {
+        ""
+    };
+    format!("{open}{waves}</svg>")
+}
+
+fn brightness_icon(percent: u8) -> String {
+    let rays = if percent > 5 {
+        "<path d=\"M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4\"/>"
+    } else {
+        ""
+    };
+    format!(
+        "<svg viewBox=\"0 0 24 24\"><circle cx=\"12\" cy=\"12\" r=\"4\"/>{rays}</svg>"
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -1187,6 +1187,45 @@ html.panning * {
 .bar-settings__check { display: flex; align-items: center; gap: 6px; margin: 8px 4px 2px; color: var(--muted); font-size: 11px; }
 
 
+
+/* ------------------------------------------------------- estado do sistema */
+
+.sys-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sys-btn:hover { color: var(--ink); background: var(--chip-bg-hover); border-color: var(--line); }
+.sys-btn b { color: var(--ink); font-size: 11px; font-variant-numeric: tabular-nums; }
+.sys-btn[hidden] { display: none; }
+.sys-btn[data-muted="true"] { color: var(--danger); }
+
+.sys-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; }
+.sys-icon svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Em 1280 a marca cede espaço para os módulos de sistema. */
+@media (max-width: 1500px) {
+  #bar-left .brand,
+  #bar-left > .hud__sep { display: none; }
+}
+
 /* --------------------------------------------------- bandeja e mídia */
 
 .bar-tray { position: relative; }
@@ -1331,6 +1370,27 @@ html.panning * {
 .note-card[data-color] .window-card__id,
 .note-card[data-color] .window-card__close { color: var(--note-ink); }
 .note-card[data-color] .dots i { background: var(--note-ink); opacity: .45; }
+
+.note-card .window-card__id { display: none; }
+
+.window-card__fmt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+}
+.window-card__fmt:hover { color: var(--ink); background: var(--chip-bg-hover); }
+.window-card__fmt[aria-pressed="true"] { color: var(--accent-ink); background: var(--accent); }
 
 .window-card__color {
   width: 15px;

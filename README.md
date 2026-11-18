@@ -231,6 +231,26 @@ Mensagens IPC: `tray_update`, `tray_activate`, `tray_secondary_activate`,
 atual ao abrir a página (`tray_request`/`media_request`), porque o primeiro
 `tray_update` pode chegar antes do WebSocket.
 
+### Módulos de sistema
+
+A barra mostra rede, bateria, volume e brilho, cada um oculto quando não se
+aplica ao hardware:
+
+| Módulo | Fonte | Interação |
+| --- | --- | --- |
+| Rede | NetworkManager (barramento de sistema) | clique mostra tipo, SSID e força do sinal |
+| Bateria | UPower `DisplayDevice` | clique mostra carga e tempo restante; some sem bateria |
+| Volume | `wpctl` (fallback `pactl`) | clique alterna mudo; roda do mouse ajusta ±5% |
+| Brilho | `/sys/class/backlight` + `logind.SetBrightness` | roda do mouse ajusta ±5%; some sem backlight |
+
+Rede, UPower e logind usam uma conexão própria do **barramento de sistema**
+(o da sessão não enxerga esses serviços). Volume e brilho são locais.
+
+Mensagens IPC: `network_state`, `battery_state`, `volume_state`,
+`brightness_state`, `volume_command`, `brightness_command` e `status_request`.
+O frontend pede o conjunto completo ao abrir a página, porque o primeiro
+estado pode ser publicado antes do WebSocket conectar.
+
 ### Regiões do canvas
 
 No lugar de workspaces, o desktop usa **regiões**: enquadramentos nomeados com
@@ -372,9 +392,10 @@ O botão de **nota** no deck cria um cartão estilizado no centro da vista (com
 cascata para notas novas). O corpo é um `<textarea>` com o mesmo visual dos
 cartões; a barra de título permite arrastar a nota pelo canvas e o `×` remove.
 
-A nota tem quatro **alças nos cantos** para redimensionar (mínimo 240×170) e um
-botão redondo na barra que alterna a cor entre **padrão, amarelo, verde, azul e
-rosa** — o texto se adapta ao contraste de cada cor.
+A nota tem quatro **alças nos cantos** para redimensionar (mínimo 240×170), um
+botão redondo que alterna a cor entre **padrão, amarelo, verde, azul e rosa**
+(o texto se adapta ao contraste) e botões **A− / A+ / B / I** para tamanho da
+letra (10–28 px), negrito e itálico.
 
 As notas são salvas em `localStorage` (`spatial-deck.notes`) com posição,
 tamanho, cor e texto, e recarregadas ao abrir o desktop. Como são cartões do

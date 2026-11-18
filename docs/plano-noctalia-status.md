@@ -317,6 +317,43 @@ transparência mostra o canvas (não a janela atrás).
 - Validado visualmente: nota amarela com alças nos quatro cantos e botão de
   cor.
 
+## Etapa 6 — Rede, bateria, volume e brilho — CONCLUÍDA
+
+- `shell-services/src/system.rs`: um laço de 1 s (rede/bateria a cada 3 s)
+  com diffs para não spammar o IPC.
+- Rede: NetworkManager no barramento de **sistema**; escolhe a conexão ativa de
+  maior prioridade (wifi > ethernet/vpn > bridge), com força do Wi-Fi via
+  `Device.Wireless.ActiveAccessPoint`.
+- Bateria: UPower `DisplayDevice` (`IsPresent`, `Percentage`, `State`,
+  `TimeToEmpty`); módulo oculto sem bateria.
+- Volume: `wpctl` com fallback `pactl`; comandos up/down/mute/set.
+- Brilho: `/sys/class/backlight` + `logind.SetBrightness` por
+  `GetSessionByPID`; módulo oculto sem backlight.
+- IPC: `network_state`, `battery_state`, `volume_state`, `brightness_state`,
+  `volume_command`, `brightness_command`, `status_request` + testes.
+- Frontend: quatro módulos compactos com ícones SVG (wifi por força, bateria
+  com nível/carregando, volume com ondas/mudo, sol), clique na rede/bateria
+  mostra toast, roda no volume/brilho; estado pedido com `status_request` no
+  `onopen`.
+
+### Evidências de teste (18/11/2026)
+
+- `cargo test --workspace` verde (23 + 20 + 23), incluindo parsers de
+  `wpctl`/`pactl` e classificação de tipos do NetworkManager.
+- Ao vivo: `network_state` → Wi-Fi "Personal_B80" (88%); `battery_state`
+  presente=false (desktop sem bateria); `volume_state` 65%; brilho
+  indisponível (sem `/sys/class/backlight`).
+- `volume_command` down → 65% e `wpctl get-volume` confirmou 0.65.
+- Barra em 1920 mostra Wi-Fi e volume; bateria/brilho ocultos. Em < 1500 a
+  marca some para abrir espaço.
+
+### Limitações
+
+- Sem bateria/backlight nesta máquina, esses módulos ficam ocultos (não há
+  simulação no modo aninhado).
+- Sliders e tiles do control center ficam para a etapa 7; aqui só barra.
+- Força do Wi-Fi depende do `ActiveAccessPoint`; em alguns drivers pode vir 0.
+
 ## Próxima etapa
 
-Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.
+Etapa 7 — control center, OSD e settings persistidos. Nada iniciado.
