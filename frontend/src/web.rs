@@ -363,6 +363,7 @@ pub fn start() -> Result<(), JsValue> {
     drawing::init(&document)?;
     connect_websocket();
 
+    ensure_notes_visible(&window, &document);
     apply_transform(&document)?;
     draw_grid(&window, &document)?;
     Ok(())
@@ -868,6 +869,80 @@ fn reset_zoom(window: &Window, document: &Document) {
         state.scale = 1.0;
         state.offset_x = 0.0;
         state.offset_y = 0.0;
+    });
+    let _ = apply_transform(document);
+    let _ = draw_grid(window, document);
+    send_transform();
+}
+
+/// Se nenhuma nota estiver visível na vista atual — por exemplo, uma nota
+/// salva longe da origem depois de reiniciar — desloca a vista (sem mudar o
+/// zoom) até a nota mais próxima do centro aparecer.
+fn ensure_notes_visible(window: &Window, document: &Document) {
+    let plan = STATE.with(|state| {
+        let state = state.borrow();
+        let scale = state.scale.max(0.01);
+        let viewport_w = state.viewport_w;
+        let viewport_h = state.viewport_h;
+        let notes: Vec<(f64, f64, f64, f64)> = state
+            .cards
+            .iter()
+            .filter(|card| card.id >= NOTE_ID_BASE)
+            .map(|card| {
+                (
+                    card.x * scale + state.offset_x,
+                    card.y * scale + state.offset_y,
+                    card.w * scale,
+                    card.h * scale,
+                )
+            })
+            .collect();
+        if notes.is_empty() {
+            return None;
+        }
+        if notes.iter().any(|(x, y, w, h)| {
+            x + w > 0.0 && *x < viewport_w && y + h > 0.0 && *y < viewport_h
+        }) {
+            return None;
+        }
+
+        let (center_x, center_y) = (viewport_w / 2.0, viewport_h / 2.0);
+        let nearest = notes.iter().min_by(|a, b| {
+            let distance_a = (a.0 + a.2 / 2.0 - center_x).powi(2)
+                + (a.1 + a.3 / 2.0 - center_y).powi(2);
+            let distance_b = (b.0 + b.2 / 2.0 - center_x).powi(2)
+                + (b.1 + b.3 / 2.0 - center_y).powi(2);
+            distance_a
+                .partial_cmp(&distance_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+
+        let margin = 60.0;
+        let (x, y, w, h) = *nearest;
+        let dx = if x + w < margin {
+            margin - x
+        } else if x > viewport_w - margin {
+            (viewport_w - margin) - (x + w)
+        } else {
+            0.0
+        };
+        let dy = if y + h < margin {
+            margin - y
+        } else if y > viewport_h - margin {
+            (viewport_h - margin) - (y + h)
+        } else {
+            0.0
+        };
+        Some((dx, dy))
+    });
+
+    let Some((dx, dy)) = plan else {
+        return;
+    };
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.offset_x += dx;
+        state.offset_y += dy;
     });
     let _ = apply_transform(document);
     let _ = draw_grid(window, document);
@@ -3787,10 +3862,16 @@ fn bind_note_controls(
     article: &Element,
 ) -> Result<(), JsValue> {
     // Formatação: A−/A+/B/I.
+    // Precisa ser `pointerdown` (como cor/fechar): o cartão captura o ponteiro
+    // no `pointerdown` para arrastar, e nesse caso o `click` é entregue ao
+    // próprio cartão, não ao botão.
     if let Ok(Some(toolbar)) = article.query_selector(".window-card__bar") {
         let document_for_fmt = document.clone();
         let article_for_fmt = article.clone();
-        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+        let press = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+            if event.button() != 0 {
+                return;
+            }
             let Some(target) = event
                 .target()
                 .and_then(|target| target.dyn_into::<Element>().ok())
@@ -3829,8 +3910,8 @@ fn bind_note_controls(
             apply_note_formatting(&article_for_fmt);
             save_notes(&document_for_fmt);
         });
-        toolbar.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
-        click.forget();
+        toolbar.add_event_listener_with_callback("pointerdown", press.as_ref().unchecked_ref())?;
+        press.forget();
     }
 
     if let Ok(Some(button)) = article.query_selector("[data-note-color]") {

@@ -386,6 +386,30 @@ Correção e prevenção:
   `volume_state` 65% e `battery_state`/`brightness_state` indisponíveis
   respondendo por `status_request`.
 
+## Correção — botões de formatação da nota — CONCLUÍDA
+
+Os botões **A−/A+/B/I** não faziam efeito: o cartão captura o ponteiro no
+`pointerdown` para arrastar, e o `click` acabava entregue ao cartão — o listener
+no `.window-card__bar` nunca disparava. O botão de cor e o de fechar já usavam
+`pointerdown`; a formatação foi alinhada a eles (com `stop_propagation` para não
+iniciar arrasto). A formatação continua salva em `localStorage` junto com a nota.
+
+Aproveitado para dois ajustes de layout:
+
+- A barra central deixou de ser `position: absolute` e virou item flex; com
+  1280 px o módulo de mídia passava por cima de zoom/DND. A mídia some abaixo
+  de 1500 px, mantendo o relógio centralizado.
+- Se nenhuma nota estiver visível ao abrir (vista restaurada longe da nota), a
+  vista é deslocada sem mudar o zoom até a nota mais próxima aparecer.
+
+### Evidências (18/11/2026)
+
+- `localStorage` (`spatial-deck.notes`) mostrava a nota "eee" com
+  `font_size: 13.0`, `bold: false`, `italic: false` após os cliques — o handler
+  não rodava.
+- Depois da correção, `cargo test --workspace` verde e o desktop sobe com a
+  nota visível em 100% e a barra sem sobreposição em 1280 px.
+
 ## Próxima etapa
 
 Etapa 7 — control center, OSD e settings persistidos. Nada iniciado.

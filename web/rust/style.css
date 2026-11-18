@@ -1059,7 +1059,13 @@ html.panning * {
 
 #hud { position: fixed; }
 .bar__group { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.bar__group--center { position: absolute; left: 50%; transform: translateX(-50%); }
+/* O centro participa do flex (sem `position: absolute`) para não passar por
+   cima do grupo da direita quando a janela fica estreita. */
+.bar__group--center {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+}
 .bar__group--end { margin-left: auto; }
 .bar__module { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .bar__module[hidden] { display: none; }
@@ -1723,6 +1729,9 @@ html.panning * {
 @media (max-width: 1500px) {
   .status { display: none; }
   .brand span { display: none; }
+  /* Com a janela padrão (1280) a mídia empurraria a barra para cima dos
+     módulos de sistema; o relógio continua centralizado. */
+  .bar-media { display: none; }
   #hud { gap: 8px; }
   .theme-chip { padding: 0 9px; }
 }
