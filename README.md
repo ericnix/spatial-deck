@@ -366,6 +366,17 @@ Pedidos de maximizar vindos do cliente são ignorados e o atalho de maximizar
 apenas restaura: maximização própria ainda não faz parte do desktop (a barra de
 título sairia da tela).
 
+### Notas rápidas
+
+O botão de **nota** no deck cria um cartão estilizado no centro da vista (com
+cascata para notas novas). O corpo é um `<textarea>` com o mesmo visual dos
+cartões; a barra de título permite arrastar a nota pelo canvas e o `×` remove.
+
+As notas são salvas em `localStorage` (`spatial-deck.notes`) com posição e
+texto, e recarregadas ao abrir o desktop. Como são cartões do shell, ficam
+abaixo das janelas reais (como os cartões de demonstração); o texto não passa
+pelo compositor.
+
 ### Camadas de janelas e imagens
 
 A pilha do canvas é explícita (fundo → topo). Cada cartão tem **▴** e **▾** na

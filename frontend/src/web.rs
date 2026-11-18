@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use web_sys::{
     CanvasRenderingContext2d, CloseEvent, Document, DomRect, Element, Event, HtmlCanvasElement,
-    HtmlInputElement, HtmlSelectElement, KeyboardEvent, MessageEvent, PointerEvent, WebSocket,
-    WheelEvent, Window,
+    HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement, KeyboardEvent, MessageEvent,
+    PointerEvent, WebSocket, WheelEvent, Window,
 };
 
 use crate::{drawing, minimalist_dark_theme, minimalist_theme};
@@ -37,6 +37,11 @@ const RECENT_KEY: &str = "spatial-deck.recent";
 const RECENT_LIMIT: usize = 10;
 /// Histórico de notificações mantido na interface.
 const HISTORY_LIMIT: usize = 100;
+/// Notas rápidas: cartões do shell com texto editável.
+const NOTES_KEY: &str = "spatial-deck.notes";
+const NOTE_ID_BASE: u32 = 10_000;
+const NOTE_W: f64 = 380.0;
+const NOTE_H: f64 = 280.0;
 /// Configuração da barra (ordem/slots e formato do relógio).
 const BAR_KEY: &str = "spatial-deck.bar";
 
@@ -137,6 +142,18 @@ struct TransformAnim {
     start_ms: f64,
     from: (f64, f64, f64),
     to: (f64, f64, f64),
+}
+
+/// Nota rápida persistida em `localStorage`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct NoteData {
+    id: u32,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    #[serde(default)]
+    text: String,
 }
 
 /// Popup visível de uma notificação, com o prazo individual.
@@ -275,6 +292,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_resize_tool(&document)?;
     setup_overview_control(&document)?;
     setup_cards(&document)?;
+    setup_notes(&window, &document)?;
     setup_deck_apps(&window, &document)?;
     setup_notifications(&window, &document)?;
     setup_tray_media(&document)?;
@@ -1019,8 +1037,26 @@ fn bind_card(document: &Document, card_id: u32) -> Result<(), JsValue> {
     // ao compositor para mover a janela real correspondente.
     let element_for_down = element.clone();
     let document_for_down = document.clone();
+    let document_for_up = document.clone();
+    let is_note = element.has_attribute("data-note");
     let pointer_down = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
         if event.button() != 0 {
+            return;
+        }
+        // A textarea da nota precisa receber clique/seleção sem iniciar arrasto
+        // nem pan do canvas.
+        if event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+            .is_some_and(|target| {
+                target
+                    .closest("[data-note-input]")
+                    .ok()
+                    .flatten()
+                    .is_some()
+            })
+        {
+            event.stop_propagation();
             return;
         }
         event.stop_propagation();
@@ -1091,6 +1127,9 @@ fn bind_card(document: &Document, card_id: u32) -> Result<(), JsValue> {
             let _ = element_for_up.class_list().remove_1("dragging");
             send_cluster();
         }
+        if is_note {
+            save_notes(&document_for_up);
+        }
     });
     element.add_event_listener_with_callback("pointerup", pointer_up.as_ref().unchecked_ref())?;
     pointer_up.forget();
@@ -1112,11 +1151,16 @@ fn bind_card(document: &Document, card_id: u32) -> Result<(), JsValue> {
     // some quando o compositor confirmar com `WindowClosed`).
     if let Ok(Some(close)) = element.query_selector(".window-card__close") {
         let close_button = close.clone();
+        let document_for_close = document.clone();
         let pointer = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
             event.stop_propagation();
             event.prevent_default();
-            let _ = close_button.class_list().add_1("is-closing");
-            send_close_window(card_id);
+            if is_note {
+                remove_note(&document_for_close, card_id);
+            } else {
+                let _ = close_button.class_list().add_1("is-closing");
+                send_close_window(card_id);
+            }
         });
         close.add_event_listener_with_callback("pointerdown", pointer.as_ref().unchecked_ref())?;
         pointer.forget();
@@ -3425,6 +3469,202 @@ fn render_media(document: &Document) {
     }
 }
 
+
+
+// ---------------------------------------------------------------------------
+// Notas rápidas
+// ---------------------------------------------------------------------------
+
+fn setup_notes(window: &Window, document: &Document) -> Result<(), JsValue> {
+    load_notes(window, document);
+
+    if let Ok(button) = by_id(document, "action-note") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            create_note(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+    Ok(())
+}
+
+fn load_notes(window: &Window, document: &Document) {
+    let Some(storage) = window.local_storage().ok().flatten() else {
+        return;
+    };
+    let Some(text) = storage.get_item(NOTES_KEY).ok().flatten() else {
+        return;
+    };
+    let notes: Vec<NoteData> = serde_json::from_str(&text).unwrap_or_default();
+    for note in notes {
+        let _ = spawn_note(document, note);
+    }
+}
+
+fn create_note(document: &Document) {
+    let (scale, offset_x, offset_y, viewport_w, viewport_h, existing) = STATE.with(|state| {
+        let state = state.borrow();
+        (
+            state.scale.max(0.01),
+            state.offset_x,
+            state.offset_y,
+            state.viewport_w,
+            state.viewport_h,
+            state
+                .cards
+                .iter()
+                .filter(|card| card.id >= NOTE_ID_BASE)
+                .count(),
+        )
+    });
+
+    let id = STATE.with(|state| {
+        state
+            .borrow()
+            .cards
+            .iter()
+            .filter(|card| card.id >= NOTE_ID_BASE)
+            .map(|card| card.id)
+            .max()
+            .map(|max| max.saturating_add(1))
+            .unwrap_or(NOTE_ID_BASE)
+    });
+
+    // Centro da vista atual, em coordenadas de mundo, com um deslocamento
+    // em cascata para notas novas não nascerem exatamente uma sobre a outra.
+    let cascade = (existing % 6) as f64 * 26.0;
+    let x = (viewport_w / 2.0 - offset_x) / scale - NOTE_W / 2.0 + cascade;
+    let y = (viewport_h / 2.0 - offset_y) / scale - NOTE_H / 2.0 + cascade;
+
+    let note = NoteData {
+        id,
+        x,
+        y,
+        w: NOTE_W,
+        h: NOTE_H,
+        text: String::new(),
+    };
+    if spawn_note(document, note).is_ok() {
+        save_notes(document);
+        show_toast(document, "Nota criada.");
+    }
+}
+
+fn spawn_note(document: &Document, note: NoteData) -> Result<(), JsValue> {
+    let world = by_id(document, "world")?;
+    let article = document.create_element("article")?;
+    article.set_id(&format!("card-{}", note.id));
+    article.set_class_name("window-card note-card");
+    article.set_attribute("data-window-id", &note.id.to_string())?;
+    article.set_attribute("data-note", "1")?;
+    article.set_attribute(
+        "style",
+        &format!(
+            "left:{}px;top:{}px;width:{}px;height:{}px",
+            note.x, note.y, note.w, note.h
+        ),
+    )?;
+    article.set_inner_html(&format!(
+        "<div class=\"window-card__bar\"><span class=\"dots\"><i></i><i></i><i></i></span>\
+         <b>nota</b><span class=\"window-card__id\">{}</span>\
+         <button class=\"window-card__close\" type=\"button\" aria-label=\"Fechar nota\">×</button>\
+         </div><div class=\"window-card__body note-card__body\">\
+         <textarea class=\"note-input\" data-note-input placeholder=\"Escreva uma nota…\" spellcheck=\"false\"></textarea>\
+         </div>",
+        note.id
+    ));
+    world.append_child(&article)?;
+
+    STATE.with(|state| {
+        state.borrow_mut().cards.push(Card {
+            id: note.id,
+            x: note.x,
+            y: note.y,
+            w: note.w,
+            h: note.h,
+            has_window: false,
+        });
+    });
+
+    bind_card(document, note.id)?;
+
+    if let Ok(Some(node)) = article.query_selector("[data-note-input]") {
+        if let Ok(input) = node.dyn_into::<HtmlTextAreaElement>() {
+            input.set_value(&note.text);
+            let document_for_input = document.clone();
+            let on_input = Closure::<dyn FnMut()>::new(move || {
+                save_notes(&document_for_input);
+            });
+            input.add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref())?;
+            on_input.forget();
+        }
+    }
+    Ok(())
+}
+
+fn remove_note(document: &Document, id: u32) {
+    STATE.with(|state| {
+        state.borrow_mut().cards.retain(|card| card.id != id);
+    });
+    if let Some(element) = document.get_element_by_id(&format!("card-{id}")) {
+        element.remove();
+    }
+    save_notes(document);
+}
+
+fn save_notes(document: &Document) {
+    let mut notes: Vec<NoteData> = Vec::new();
+    let Ok(nodes) = document.query_selector_all("[data-note]") else {
+        return;
+    };
+    for index in 0..nodes.length() {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Ok(element) = node.dyn_into::<Element>() else {
+            continue;
+        };
+        let Some(id) = element
+            .get_attribute("data-window-id")
+            .and_then(|value| value.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let text = element
+            .query_selector("[data-note-input]")
+            .ok()
+            .flatten()
+            .and_then(|node| node.dyn_into::<HtmlTextAreaElement>().ok())
+            .map(|input| input.value())
+            .unwrap_or_default();
+        let geometry = STATE.with(|state| {
+            state
+                .borrow()
+                .cards
+                .iter()
+                .find(|card| card.id == id)
+                .map(|card| (card.x, card.y, card.w, card.h))
+        })
+        .unwrap_or((0.0, 0.0, NOTE_W, NOTE_H));
+        notes.push(NoteData {
+            id,
+            x: geometry.0,
+            y: geometry.1,
+            w: geometry.2,
+            h: geometry.3,
+            text,
+        });
+    }
+
+    if let Some(window) = web_sys::window() {
+        if let Ok(Some(storage)) = window.local_storage() {
+            if let Ok(json) = serde_json::to_string(&notes) {
+                let _ = storage.set_item(NOTES_KEY, &json);
+            }
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Painel de camadas (janelas e imagens)

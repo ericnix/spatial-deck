@@ -293,6 +293,18 @@ transparência mostra o canvas (não a janela atrás).
 - Validado visualmente com duas imagens sintéticas (uma `abaixo`, uma `acima`),
   alças visíveis e painel com as duas linhas; `cargo test --workspace` verde.
 
+## Ajuste — nota rápida — CONCLUÍDO
+
+- Botão de nota no deck cria um cartão no centro da vista (cascata de 26 px).
+- Corpo em `<textarea>` estilizado como os cartões; arrasto pela barra de
+  título (clique na textarea não inicia arrasto/pan) e `×` remove.
+- Notas entram em `STATE.cards` (ids a partir de 10000, sem colidir com
+  janelas/diálogos), mas não são enviadas como janelas reais.
+- Persistência em `localStorage` (`spatial-deck.notes`): posição, tamanho e
+  texto; salva ao digitar, ao arrastar e ao remover; carregadas no boot.
+- Validado: nota criada, texto exibido, arrastada (estado) e recarregada após
+  reiniciar o desktop sem o gancho de teste.
+
 ## Próxima etapa
 
 Etapa 6 — rede, bateria, volume e brilho na barra. Nada iniciado.
