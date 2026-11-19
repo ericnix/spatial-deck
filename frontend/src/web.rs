@@ -18,7 +18,7 @@ use std::{
 use common::{
     fuzzy_score, push_recent, toggle_favorite, CanvasRegion, CanvasTheme, CanvasZoom, ChromeRect,
     BrightnessAction, ClusterPlacement, DesktopApp, IpcMessage, MediaAction,
-    NotificationButton, NotificationItem, TrayItem, TrayMenuEntry, VolumeAction,
+    NotificationButton, NotificationItem, SessionActionKind, TrayItem, TrayMenuEntry, VolumeAction,
     NOTIFICATION_CLOSED_DISMISSED, NOTIFICATION_CLOSED_EXPIRED,
 };
 use serde::{Deserialize, Serialize};
@@ -378,10 +378,12 @@ pub fn start() -> Result<(), JsValue> {
     setup_cards(&document)?;
     setup_notes(&window, &document)?;
     setup_deck_apps(&window, &document)?;
+    apply_launcher_deep_link(&window, &document);
     setup_notifications(&window, &document)?;
     setup_tray_media(&document)?;
     setup_system(&document)?;
     setup_control_center(&window, &document)?;
+    setup_session_menu(&document)?;
     setup_layers(&document)?;
     drawing::init(&document)?;
     connect_websocket();
@@ -1837,6 +1839,7 @@ fn send_chrome_rects(document: &Document) {
         "tray-menu",
         "layers-panel",
         "control-center",
+        "session-menu",
         "osd",
     ] {
         let Some(element) = document.get_element_by_id(id) else {
@@ -2205,6 +2208,11 @@ fn handle_server_message(text: &str) {
         } => {
             apply_settings(theme, bar, night_light);
         }
+        IpcMessage::ToggleSessionMenu => {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                toggle_session_menu(&document);
+            }
+        }
         IpcMessage::CloseWindow { .. } => {}
         IpcMessage::NotificationAction { .. }
         | IpcMessage::NotificationHold { .. }
@@ -2226,7 +2234,8 @@ fn handle_server_message(text: &str) {
         | IpcMessage::BluetoothSetEnabled { .. }
         | IpcMessage::PowerProfileSet { .. }
         | IpcMessage::SettingsRequest
-        | IpcMessage::SetSetting { .. } => {}
+        | IpcMessage::SetSetting { .. }
+        | IpcMessage::SessionAction { .. } => {}
         _ => {}
     }
 }
@@ -2281,6 +2290,53 @@ fn apply_server_cluster(placements: &[ClusterPlacement]) {
     let _ = update_glow(&document);
 }
 
+/// `?q=...` abre o launcher já filtrado (deep link). `%XX` é decodificado;
+/// `+` continua literal para não quebrar expressões da calculadora.
+fn apply_launcher_deep_link(window: &Window, document: &Document) {
+    let Ok(search) = window.location().search() else {
+        return;
+    };
+    let mut query = None;
+    for part in search.trim_start_matches('?').split('&') {
+        if let Some(value) = part.strip_prefix("q=") {
+            query = Some(percent_decode(value));
+        }
+    }
+    let Some(query) = query else {
+        return;
+    };
+    if query.trim().is_empty() {
+        return;
+    }
+    STATE.with(|state| state.borrow_mut().app_query = query.clone());
+    if let Ok(input) = by_id(document, "app-search") {
+        if let Ok(input) = input.dyn_into::<HtmlInputElement>() {
+            input.set_value(&query);
+        }
+    }
+    let _ = set_app_drawer_open(document, true);
+    render_app_list(document, &query);
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
+            if let Some(value) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
+                output.push(value);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&output).into_owned()
+}
+
 fn render_apps(apps: &[DesktopApp]) {
     let Some(window) = web_sys::window() else {
         return;
@@ -2314,6 +2370,17 @@ fn render_app_list(document: &Document, query: &str) {
     let mut html = String::new();
     let mut shown = 0usize;
     let mut rendered = HashSet::new();
+    let mut calc_shown = false;
+
+    // Calculadora: qualquer expressão válida vira o primeiro item.
+    if !normalized.is_empty() {
+        if let Some(value) = crate::calc::evaluate(&normalized) {
+            let result = crate::calc::format_result(value);
+            html.push_str(&calc_tile_html(&result, query.trim()));
+            shown += 1;
+            calc_shown = true;
+        }
+    }
 
     if normalized.is_empty() {
         let favorites_apps: Vec<&DesktopApp> = favorites
@@ -2401,8 +2468,24 @@ fn render_app_list(document: &Document, query: &str) {
         } else {
             format!("{shown} de {total} aplicativos.")
         };
+        let text = if calc_shown {
+            format!("Enter copia o resultado · {text}")
+        } else {
+            text
+        };
         let _ = summary.set_inner_html(&escape_html(&text));
     }
+}
+
+fn calc_tile_html(value: &str, expression: &str) -> String {
+    format!(
+        "<button class=\"app-tile app-tile--calc\" type=\"button\" data-calc=\"{}\" data-name=\"resultado\" title=\"Enter copia o resultado\">\
+         <span class=\"app-tile__icon\"><i>=</i></span>\
+         <span class=\"app-tile__name\">= {} <small>{}</small></span></button>",
+        escape_html(value),
+        escape_html(value),
+        escape_html(expression),
+    )
 }
 
 fn app_tile_html(app: &DesktopApp, favorite: bool) -> String {
@@ -2645,6 +2728,15 @@ fn setup_deck_apps(window: &Window, document: &Document) -> Result<(), JsValue> 
                 }
                 let query = STATE.with(|state| state.borrow().app_query.clone());
                 render_app_list(&doc, &query);
+                return;
+            }
+
+            if let Some(result) = target.closest("[data-calc]").ok().flatten() {
+                event.prevent_default();
+                if let Some(value) = result.get_attribute("data-calc") {
+                    copy_text(&value);
+                    show_toast(&doc, &format!("Resultado copiado: {value}"));
+                }
                 return;
             }
 
@@ -4620,7 +4712,7 @@ fn setup_control_center(window: &Window, document: &Document) -> Result<(), JsVa
                     }
                 }
                 "session" => {
-                    show_toast(&document_for_click, "Menu de sessão chega na etapa 8.");
+                    open_session_menu(&document_for_click);
                 }
                 _ => {}
             }
@@ -5042,6 +5134,208 @@ fn show_osd(document: &Document, kind: &str, percent: u8, muted: bool) {
         OSD_TIMEOUT.with(|slot| *slot.borrow_mut() = Some(handle));
     }
     callback.forget();
+}
+
+// ---------------------------------------------------------------------------
+// Menu de sessão
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Ação destrutiva aguardando confirmação (Reiniciar/Desligar).
+    static SESSION_PENDING: RefCell<Option<SessionActionKind>> = const { RefCell::new(None) };
+}
+
+fn setup_session_menu(document: &Document) -> Result<(), JsValue> {
+    if let Ok(button) = by_id(document, "session-close") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            close_session_menu(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(panel) = by_id(document, "session-menu") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            let Some(target) = event
+                .target()
+                .and_then(|target| target.dyn_into::<Element>().ok())
+            else {
+                return;
+            };
+            let Ok(Some(element)) = target.closest("[data-session]") else {
+                return;
+            };
+            let action = element.get_attribute("data-session").unwrap_or_default();
+            match action.as_str() {
+                "logout" => {
+                    send_session(SessionActionKind::Logout);
+                    close_session_menu(&document_for_click);
+                    show_toast(&document_for_click, "Encerrando o Spatial Deck…");
+                }
+                "suspend" => {
+                    send_session(SessionActionKind::Suspend);
+                    close_session_menu(&document_for_click);
+                    show_toast(&document_for_click, "Suspendendo o computador…");
+                }
+                "reboot" => request_session_confirmation(
+                    &document_for_click,
+                    SessionActionKind::Reboot,
+                    "Reiniciar o computador?",
+                ),
+                "poweroff" => request_session_confirmation(
+                    &document_for_click,
+                    SessionActionKind::PowerOff,
+                    "Desligar o computador?",
+                ),
+                _ => {}
+            }
+        });
+        panel.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "session-confirm-ok") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            let pending = SESSION_PENDING.with(|slot| slot.borrow_mut().take());
+            let Some(action) = pending else {
+                return;
+            };
+            let label = match action {
+                SessionActionKind::Reboot => "Reiniciando o computador…",
+                SessionActionKind::PowerOff => "Desligando o computador…",
+                _ => "Executando…",
+            };
+            send_session(action);
+            close_session_menu(&document_for_click);
+            show_toast(&document_for_click, label);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    if let Ok(button) = by_id(document, "session-confirm-cancel") {
+        let document_for_click = document.clone();
+        let click = Closure::<dyn FnMut()>::new(move || {
+            hide_session_confirmation(&document_for_click);
+        });
+        button.add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
+        click.forget();
+    }
+
+    // Esc e clique fora, em captura para vencer o canvas.
+    let document_for_key = document.clone();
+    let key = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+        if event.key() != "Escape" || is_hidden(&document_for_key, "session-menu") {
+            return;
+        }
+        if is_hidden(&document_for_key, "session-confirm") {
+            close_session_menu(&document_for_key);
+        } else {
+            hide_session_confirmation(&document_for_key);
+        }
+        event.prevent_default();
+    });
+    document.add_event_listener_with_callback_and_bool(
+        "keydown",
+        key.as_ref().unchecked_ref(),
+        true,
+    )?;
+    key.forget();
+
+    let document_for_outside = document.clone();
+    let outside = Closure::<dyn FnMut(PointerEvent)>::new(move |event: PointerEvent| {
+        if is_hidden(&document_for_outside, "session-menu") {
+            return;
+        }
+        let Some(target) = event
+            .target()
+            .and_then(|target| target.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if target.closest("#session-menu").ok().flatten().is_some() {
+            return;
+        }
+        close_session_menu(&document_for_outside);
+    });
+    document.add_event_listener_with_callback_and_bool(
+        "pointerdown",
+        outside.as_ref().unchecked_ref(),
+        true,
+    )?;
+    outside.forget();
+
+    Ok(())
+}
+
+fn send_session(action: SessionActionKind) {
+    send_message(&IpcMessage::SessionAction { action });
+}
+
+fn toggle_session_menu(document: &Document) {
+    if is_hidden(document, "session-menu") {
+        open_session_menu(document);
+    } else {
+        close_session_menu(document);
+    }
+}
+
+fn open_session_menu(document: &Document) {
+    set_control_center(document, false);
+    close_popover_if_open(document, "theme-popover", "theme-menu-btn");
+    close_popover_if_open(document, "bar-settings-panel", "bar-settings-btn");
+    close_popover_if_open(document, "calendar-popover", "clock-btn");
+    hide_session_confirmation(document);
+    if let Some(element) = document.get_element_by_id("session-menu") {
+        let _ = element.remove_attribute("hidden");
+    }
+    if let Ok(Some(action)) = document.query_selector("#session-menu .session-action:not([disabled])") {
+        if let Ok(element) = action.dyn_into::<web_sys::HtmlElement>() {
+            let _ = element.focus();
+        }
+    }
+    send_chrome_rects(document);
+}
+
+fn close_session_menu(document: &Document) {
+    hide_session_confirmation(document);
+    if let Some(element) = document.get_element_by_id("session-menu") {
+        let _ = element.set_attribute("hidden", "");
+    }
+    send_chrome_rects(document);
+}
+
+fn request_session_confirmation(document: &Document, action: SessionActionKind, text: &str) {
+    SESSION_PENDING.with(|slot| *slot.borrow_mut() = Some(action));
+    if let Some(label) = document.get_element_by_id("session-confirm-text") {
+        let _ = label.set_text_content(Some(text));
+    }
+    if let Some(element) = document.get_element_by_id("session-confirm") {
+        let _ = element.remove_attribute("hidden");
+    }
+    if let Some(button) = document.get_element_by_id("session-confirm-ok") {
+        if let Ok(button) = button.dyn_into::<web_sys::HtmlElement>() {
+            let _ = button.focus();
+        }
+    }
+    send_chrome_rects(document);
+}
+
+fn hide_session_confirmation(document: &Document) {
+    SESSION_PENDING.with(|slot| *slot.borrow_mut() = None);
+    if let Some(element) = document.get_element_by_id("session-confirm") {
+        let _ = element.set_attribute("hidden", "");
+    }
+}
+
+/// Copia texto para a área de transferência do compositor (via WebKit).
+fn copy_text(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.navigator().clipboard().write_text(text);
+    }
 }
 
 fn set_svg(document: &Document, id: &str, svg: &str) {

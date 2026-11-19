@@ -484,7 +484,67 @@ A UI foi dirigida de verdade via AT-SPI (`pyatspi`), sem simular eventos:
 - Testar Wi-Fi/Bluetooth de verdade (desligar) foi evitado para não derrubar a
   rede/sessão; validação ficou no caminho D-Bus idempotente e nos logs.
 
+## Etapa 8 — Menu de sessão, perfis de energia e calculadora — CONCLUÍDA
+
+### (a) logind + menu de sessão
+
+- IPC: `session_action { action }` (`suspend`, `reboot`, `power_off`,
+  `logout`, `lock`) e `toggle_session_menu` (atalho global).
+- `shell-services/src/session.rs`: `Suspend`/`Reboot`/`PowerOff` chamam
+  `org.freedesktop.login1.Manager` com `interactive=false`; `Logout` e `Lock`
+  não vão ao logind. `SPATIAL_DECK_SESSION_DRYRUN=1` registra a chamada sem
+  executá-la.
+- Compositor: `Logout` marca `exit_requested` e encerra o laço; o
+  `run-rust.sh` limpa shell/serviços. `Ctrl+Alt+S` publica
+  `toggle_session_menu`.
+- Frontend: modal `#session-menu` com Suspender/Reiniciar/Desligar/Sair do
+  desktop/Bloquear; **confirmação** para reiniciar/desligar, `Esc`/clique fora
+  fecham, e o painel entra em `ChromeRects`. O tile **Sessão** da central abre
+  o mesmo modal.
+
+### (b) Perfis de energia
+
+Já entregue na etapa 7 e mantido: o tile **Energia** lê `PowerProfiles` do
+tuned-ppd, mostra o perfil ativo traduzido (Economia/Equilibrado/Desempenho) e
+cicla via `power_profile_set`.
+
+### (c) Calculadora do launcher
+
+- `frontend/src/calc.rs`: parser próprio (sem `eval`) com precedência correta,
+  `+ - * / % ^`, parênteses, unário, potência associativa à direita e decimais
+  com `.` ou `,`; recusa sintaxe inválida, divisão por zero e não finitos.
+- Resultado aparece como primeiro item da busca (`= 8 2+2*3`); clique ou
+  `Enter` copiam para a área de transferência (Clipboard API) com toast.
+- Deep link `?q=...` abre o launcher filtrado (`%XX` decodificado, `+`
+  literal).
+
+### Evidências (19/11/2026)
+
+- UI dirigida via AT-SPI: **Central → Sessão** abriu o modal com as cinco
+  ações; **Reiniciar** mostrou a confirmação; **Confirmar** gerou no log
+  `ação de sessão em dry-run action=Reboot method="Reboot"` (sem reiniciar).
+- **Sair do desktop** encerrou só o deck: log
+  `sair do desktop pedido pelo menu de sessão`, compositor/shell/serviços
+  encerrados e a sessão hospedeira intacta.
+- `toggle_session_menu` enviado pelo socket abriu o mesmo modal (caminho do
+  `Ctrl+Alt+S`).
+- Calculadora: `?q=2%2B2*3` abriu a gaveta com `= 8 2+2*3` como primeiro item;
+  clique mostrou o toast `Resultado copiado: 8`.
+- `run-rust.sh` sem `SPATIAL_DECK_THEME` respeitou o tema persistido (Nord).
+- Testes: **25** (common) + **20** (compositor) + **3** (calc) + **28**
+  (services) verdes; `cargo build --workspace` limpo.
+
+### Limitações
+
+- `Suspend`, `Reboot` e `PowerOff` **não** foram executados de verdade (risco
+  para a máquina); a validação foi com `SPATIAL_DECK_SESSION_DRYRUN=1`, que usa
+  o mesmo caminho até a chamada D-Bus.
+- `Lock` segue desabilitado até a etapa 9.
+- `Ctrl+Alt+S` depende do foco da janela do deck no modo aninhado (o WM
+  hospedeiro pode capturar antes).
+- A cópia do resultado usa a área de transferência do compositor aninhado;
+  não é a mesma do host.
+
 ## Próxima etapa
 
-Etapa 8 — session menu (logind), perfis de energia e calculadora do launcher.
-Nada iniciado.
+Etapa 9 — lock screen (session-lock + idle-notify). Nada iniciado.

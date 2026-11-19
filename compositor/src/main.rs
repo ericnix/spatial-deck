@@ -32,7 +32,8 @@ use anyhow::{Context, Result};
 use canvas_render::{scaled_window_elements, ScaledSurfaceElement};
 use common::{
     BrightnessAction, CanvasTheme, CanvasZoom, ChromeRect, ClusterPlacement, DesktopApp,
-    IpcMessage, VolumeAction, OVERVIEW_BOTTOM, OVERVIEW_GAP, OVERVIEW_MARGIN_X, OVERVIEW_TOP,
+    IpcMessage, SessionActionKind, VolumeAction, OVERVIEW_BOTTOM, OVERVIEW_GAP,
+    OVERVIEW_MARGIN_X, OVERVIEW_TOP,
 };
 use freedesktop_entry_parser::parse_entry;
 use futures_util::{SinkExt, StreamExt};
@@ -494,6 +495,8 @@ struct App {
     chrome_rects: Vec<Rectangle<i32, smithay::utils::Logical>>,
     /// Ferramenta de redimensionamento ativa no deck.
     resize_tool: bool,
+    /// `Logout` pedido pelo menu de sessão: encerra só o desktop aninhado.
+    exit_requested: bool,
     /// Linha inferior da barra superior: as janelas reais são cortadas aqui.
     hud_bottom: Option<i32>,
     /// Última posição absoluta do ponteiro no output. `PointerHandle` pode
@@ -600,6 +603,7 @@ impl App {
             pending_cluster: false,
             chrome_rects: Vec::new(),
             resize_tool: false,
+            exit_requested: false,
             hud_bottom: None,
             pointer_screen: Point::from((0.0, 0.0)),
             overview: None,
@@ -1854,6 +1858,13 @@ impl App {
             IpcMessage::Toast { .. } => {
                 // Mensagem enviada pelo compositor; ignorada se ecoada.
             }
+            IpcMessage::SessionAction { action } => {
+                if action == SessionActionKind::Logout {
+                    info!("sair do desktop pedido pelo menu de sessão");
+                    self.exit_requested = true;
+                }
+                // As demais ações seguem para o `shell-services` via barramento.
+            }
             IpcMessage::Notification { .. }
             | IpcMessage::NotificationClosed { .. }
             | IpcMessage::NotificationAction { .. }
@@ -1892,7 +1903,8 @@ impl App {
             | IpcMessage::Osd { .. }
             | IpcMessage::SettingsRequest
             | IpcMessage::SettingsState { .. }
-            | IpcMessage::SetSetting { .. } => {
+            | IpcMessage::SetSetting { .. }
+            | IpcMessage::ToggleSessionMenu => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.
@@ -3300,6 +3312,13 @@ fn run_compositor(
                             return FilterResult::Intercept(());
                         }
 
+                        // Menu de sessão: o shell é quem desenha a gaveta.
+                        if ctrl_alt && sym == Keysym::s {
+                            info!("atalho do menu de sessão");
+                            state.publish(IpcMessage::ToggleSessionMenu);
+                            return FilterResult::Intercept(());
+                        }
+
                         // Visão geral. Escape sai; Ctrl+Alt+O alterna (o
                         // Alt+Tab puro é capturado pelo WM hospedeiro).
                         if state.overview.is_some() && sym == Keysym::Escape {
@@ -3594,7 +3613,7 @@ fn run_compositor(
             _ => {}
         });
 
-        if should_exit || matches!(status, PumpStatus::Exit(_)) {
+        if should_exit || state.exit_requested || matches!(status, PumpStatus::Exit(_)) {
             info!(
                 close_requested = should_exit,
                 pump_exit = matches!(status, PumpStatus::Exit(_)),

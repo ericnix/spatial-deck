@@ -8,6 +8,9 @@
 #[cfg(target_arch = "wasm32")]
 mod web;
 
+/// Calculadora da busca do launcher (puro Rust, testável no host).
+pub mod calc;
+
 #[cfg(target_arch = "wasm32")]
 pub mod minimalist_theme;
 

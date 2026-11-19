@@ -63,7 +63,12 @@ Se `wasm-pack` não estiver instalado, `./build-wasm.sh` tenta o fallback
 
 O script compila o workspace, sobe o compositor, abre o `spatial-deck-shell`
 (GTK/WebKit) em `WAYLAND_DISPLAY=spatial-deck` e inicia o
-`spatial-deck-services`. A UI é carregada de `http://127.0.0.1:7338/?theme=…`.
+`spatial-deck-services`. A UI é carregada de `http://127.0.0.1:7338/`; o tema
+vem do `settings.json`/`localStorage`. Para forçar um tema use
+`SPATIAL_DECK_THEME=nord ./run-rust.sh` (vira `?theme=nord` na URL).
+`SPATIAL_DECK_URL` sobrescreve a URL inteira e `?q=2%2B2*3` já abre o launcher
+com a busca preenchida (deep link).
+
 Sem o shell o compositor mostra apenas o fundo sólido do tema — é ele que pinta
 o canvas, o deck e as fichas. Ao sair (`Ctrl-C`), os três processos são
 encerrados e o socket é limpo.
@@ -283,7 +288,7 @@ ficar acima das janelas.
 | Night light | placeholder persistido; gamma real fica para a etapa 11 |
 | Tema do canvas | os cinco temas, com a precedência da URL documentada |
 | Energia | alterna `PowerProfiles` (power-profiles-daemon/tuned-ppd) |
-| Sessão | placeholder até a etapa 8 |
+| Sessão | abre o menu de sessão (suspender, reiniciar, desligar, sair do desktop) |
 
 Os sliders de **volume** (com mudo) e **brilho** mandam comandos absolutos; o
 de brilho some sem backlight. O estado dos tiles vem do `shell-services`
@@ -300,13 +305,34 @@ inclusive por fontes externas — e o primeiro sample não gera OSD.
 e viram `volume_command`/`brightness_command`. No modo aninhado elas só chegam
 quando a janela do deck tem foco; o WM hospedeiro pode capturá-las antes.
 
+### Menu de sessão
+
+O tile **Sessão** da central (ou `Ctrl+Alt+S`, capturado pelo compositor)
+abre um modal com:
+
+| Ação | Comportamento |
+| --- | --- |
+| Suspender | `logind.Suspend(false)` |
+| Reiniciar | pede confirmação; `logind.Reboot(false)` |
+| Desligar | pede confirmação; `logind.PowerOff(false)` |
+| Sair do desktop | encerra **apenas** o deck aninhado (compositor + shell + serviços) |
+| Bloquear | desabilitado até a etapa 9 |
+
+O compositor trata `session_action { logout }` marcando `exit_requested` e sai
+do laço; o `run-rust.sh` limpa o resto. As ações destrutivas vão por
+`shell-services/src/session.rs`, com
+`SPATIAL_DECK_SESSION_DRYRUN=1` disponível para validar o caminho sem
+reiniciar/desligar a máquina.
+
 ### Configurações persistidas
 
 Fonte única: `~/.config/spatial-deck/settings.json`, gravado pelo
 `shell-services` (chaves `theme`, `bar` e `night_light`). O frontend mantém o
 `localStorage` como cache/fallback, pede `settings_request` ao conectar e
 envia `set_setting` a cada mudança. `?theme=` continua tendo precedência sobre
-o arquivo (e o tema escolhido na UI é regravado como preferência).
+o arquivo (e o tema escolhido na UI é regravado como preferência). O
+`run-rust.sh` só inclui `?theme=` quando `SPATIAL_DECK_THEME` é passado; sem
+isso o tema persistido vale.
 
 ### Regiões do canvas
 
@@ -397,8 +423,15 @@ O launcher tem:
 - **recentes**: os últimos 10 aplicativos abertos aparecem logo abaixo;
 - **ícones reais**: o compositor serve `/icon/<nome>` a partir dos temas do
   freedesktop e o frontend cai para a inicial do nome quando não encontra;
+- **calculadora**: se a busca for uma expressão aritmética válida, o resultado
+  aparece como primeiro item (`= 8 2+2*3`); `Enter`/clique copia o valor para
+  a área de transferência e mostra um toast. Parser próprio (sem `eval`) em
+  `frontend/src/calc.rs`, com `+ - * / % ^`, parênteses, unário e decimais com
+  `.` ou `,`;
+- **deep link**: `?q=texto` abre a gaveta já filtrada; `%XX` é decodificado e
+  `+` continua literal para não quebrar contas;
 - **teclado**: `↓`/`↑` movem o foco para o primeiro/último tile, as setas
-  navegam entre tiles, `Enter` abre, `Esc` fecha.
+  navegam entre tiles, `Enter` abre (ou copia o resultado), `Esc` fecha.
 
 Clicar num aplicativo envia `LaunchApp` ao compositor, que o inicia com
 `WAYLAND_DISPLAY=spatial-deck`, `DISPLAY=:N` (XWayland) e as variáveis do
@@ -556,6 +589,8 @@ O JSON é internamente marcado por `type` (snake_case):
 {"type":"power_profile_state","available":true,"active":"power-saver","profiles":["power-saver","balanced","performance"]}
 {"type":"osd","kind":"volume","percent":65,"muted":false}
 {"type":"settings_state","theme":"nord","bar":{"hour24":true,"modules":[]},"night_light":false}
+{"type":"session_action","action":"logout"}
+{"type":"toggle_session_menu"}
 ```
 
 - `CanvasTransform` aplica `screen_x = world_x * scale + offset_x` e

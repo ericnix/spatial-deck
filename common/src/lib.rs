@@ -290,6 +290,26 @@ pub enum IpcMessage {
         key: String,
         value: serde_json::Value,
     },
+
+    /// Ação escolhida no menu de sessão.
+    SessionAction { action: SessionActionKind },
+
+    /// O compositor pede ao shell para abrir/fechar o menu de sessão
+    /// (atalho global `Ctrl+Alt+S`).
+    ToggleSessionMenu,
+}
+
+/// Ações de sessão aceitas pelo menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionActionKind {
+    Suspend,
+    Reboot,
+    PowerOff,
+    /// Encerra apenas o desktop aninhado (não a sessão hospedeira).
+    Logout,
+    /// Placeholder até a etapa 9 (lock screen).
+    Lock,
 }
 
 /// Ações de volume aceitas pelo `shell-services`.
@@ -1095,6 +1115,34 @@ mod tests {
         let json = request.to_json().unwrap();
         assert!(json.contains("\"type\":\"settings_request\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), request);
+    }
+
+    #[test]
+    fn session_messages_round_trip() {
+        for action in [
+            SessionActionKind::Suspend,
+            SessionActionKind::Reboot,
+            SessionActionKind::PowerOff,
+            SessionActionKind::Logout,
+            SessionActionKind::Lock,
+        ] {
+            let message = IpcMessage::SessionAction { action };
+            let json = message.to_json().unwrap();
+            assert!(json.contains("\"type\":\"session_action\""));
+            assert_eq!(IpcMessage::from_json(&json).unwrap(), message);
+        }
+
+        let json = IpcMessage::SessionAction {
+            action: SessionActionKind::PowerOff,
+        }
+        .to_json()
+        .unwrap();
+        assert!(json.contains("\"action\":\"power_off\""));
+
+        let toggle = IpcMessage::ToggleSessionMenu;
+        let json = toggle.to_json().unwrap();
+        assert!(json.contains("\"type\":\"toggle_session_menu\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), toggle);
     }
 
     #[test]

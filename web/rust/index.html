@@ -235,6 +235,28 @@ screen_y = world_y * scale + offset_y</pre>
     </div>
   </section>
 
+  <section id="session-menu" class="session-menu" hidden role="dialog" aria-label="Menu de sessão">
+    <header class="session-menu__head">
+      <b>Sessão</b>
+      <span class="control-center__spacer"></span>
+      <button id="session-close" class="panel-btn" type="button" aria-label="Fechar menu de sessão">×</button>
+    </header>
+    <div class="session-menu__actions">
+      <button class="session-action" type="button" data-session="suspend"><span>Suspender</span><small>suspende o computador</small></button>
+      <button class="session-action" type="button" data-session="reboot"><span>Reiniciar</span><small>pede confirmação</small></button>
+      <button class="session-action" type="button" data-session="poweroff"><span>Desligar</span><small>pede confirmação</small></button>
+      <button class="session-action" type="button" data-session="logout"><span>Sair do desktop</span><small>encerra apenas o Spatial Deck</small></button>
+      <button class="session-action" type="button" data-session="lock" disabled><span>Bloquear</span><small>chega na etapa 9</small></button>
+    </div>
+    <div id="session-confirm" class="session-confirm" hidden>
+      <p id="session-confirm-text">Confirmar?</p>
+      <div class="session-confirm__row">
+        <button id="session-confirm-cancel" class="hud-action" type="button">Cancelar</button>
+        <button id="session-confirm-ok" class="hud-action session-confirm__danger" type="button">Confirmar</button>
+      </div>
+    </div>
+  </section>
+
   <div id="osd" class="osd" hidden aria-live="polite">
     <span id="osd-icon" class="osd__icon"></span>
     <span class="osd__track"><i id="osd-fill" class="osd__fill"></i></span>

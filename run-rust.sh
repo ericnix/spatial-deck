@@ -27,7 +27,13 @@ SHELL_LOG="${TMPDIR:-/tmp}/spatial-deck-shell.log"
 SERV_LOG="${TMPDIR:-/tmp}/spatial-deck-services.log"
 SOCK="/tmp/spatial-deck.sock"
 RUNTIME="${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR ausente}"
-URL="${SPATIAL_DECK_URL:-http://127.0.0.1:7338/?theme=${SPATIAL_DECK_THEME:-default}}"
+# Só força um tema quando SPATIAL_DECK_THEME é passado explicitamente; sem
+# isso vale o tema persistido em settings.json (precedência da URL).
+if [ -n "${SPATIAL_DECK_THEME:-}" ]; then
+	URL="${SPATIAL_DECK_URL:-http://127.0.0.1:7338/?theme=${SPATIAL_DECK_THEME}}"
+else
+	URL="${SPATIAL_DECK_URL:-http://127.0.0.1:7338/}"
+fi
 COMP_PID=""
 SHELL_PID=""
 SERV_PID=""

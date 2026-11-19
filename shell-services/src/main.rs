@@ -12,6 +12,7 @@ mod dbus;
 mod ipc;
 mod media;
 mod regions;
+mod session;
 mod settings;
 mod system;
 mod store;
@@ -165,6 +166,12 @@ async fn handle(
                 warn!(%key, "configuração desconhecida ou com valor inválido");
             }
         }
+        IpcMessage::SessionAction { action } => {
+            session::perform(action).await;
+        }
+        // O shell abre/fecha o menu por conta própria; o compositor só
+        // publica o atalho global.
+        IpcMessage::ToggleSessionMenu => {}
         IpcMessage::RegionListRequest => {
             send_regions(regions, ipc).await;
         }
