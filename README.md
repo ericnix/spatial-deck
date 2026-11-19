@@ -289,6 +289,7 @@ ficar acima das janelas.
 | Tema do canvas | os cinco temas, com a precedência da URL documentada |
 | Energia | alterna `PowerProfiles` (power-profiles-daemon/tuned-ppd) |
 | Sessão | abre o menu de sessão (suspender, reiniciar, desligar, sair do desktop) |
+| Bloqueio automático | alterna 0/1/5/10/15 min de inatividade até bloquear |
 
 Os sliders de **volume** (com mudo) e **brilho** mandam comandos absolutos; o
 de brilho some sem backlight. O estado dos tiles vem do `shell-services`
@@ -316,7 +317,7 @@ abre um modal com:
 | Reiniciar | pede confirmação; `logind.Reboot(false)` |
 | Desligar | pede confirmação; `logind.PowerOff(false)` |
 | Sair do desktop | encerra **apenas** o deck aninhado (compositor + shell + serviços) |
-| Bloquear | desabilitado até a etapa 9 |
+| Bloquear | esconde as janelas, captura o input e pede a senha |
 
 O compositor trata `session_action { logout }` marcando `exit_requested` e sai
 do laço; o `run-rust.sh` limpa o resto. As ações destrutivas vão por
@@ -324,10 +325,37 @@ do laço; o `run-rust.sh` limpa o resto. As ações destrutivas vão por
 `SPATIAL_DECK_SESSION_DRYRUN=1` disponível para validar o caminho sem
 reiniciar/desligar a máquina.
 
+### Tela de bloqueio
+
+Bloquear (menu de sessão) deixa **apenas o shell** visível: o compositor para de
+desenhar janelas, layers e chrome, ignora atalhos e manda teclado/ponteiro para
+o campo de senha. A UI mostra relógio grande, data e o formulário; `Esc` não
+desbloqueia.
+
+- **Autenticação**: `shell-services/src/auth.rs` usa o helper setuid
+  `unix_chkpwd` (o mesmo que o `pam_unix` chama), com a senha indo por stdin
+  terminada em NUL. Não exige `/etc/pam.d/spatial-deck` nem root e não passa
+  pelo `pam_faillock`, então errar a senha no lock não bloqueia a conta do
+  host. A senha nunca é logada nem persistida.
+- **Backoff**: 1, 2, 4, 8, 16, 30 s entre tentativas; a mensagem de espera
+  aparece no formulário.
+- **Idle**: o compositor conta a inatividade de teclado/ponteiro e bloqueia
+  após `lock_after_minutes` (0 = desligado). O valor vem do `settings.json` e
+  pode ser alternado na central de controle. Desbloquear reinicia o contador.
+- **Saída de emergência**: fechar a janela do deck pelo sistema hospedeiro
+  encerra o desktop (senão não haveria como destravar sem a senha).
+
+O `ext-session-lock-v1` do Smithay 0.7 não é usado porque o shell é GTK/WebKit
+e não consegue criar lock surfaces; esta etapa usa o fallback documentado
+(input inhibitor manual) e o bloqueio vale só dentro do desktop aninhado — não
+é uma barreira de segurança contra a sessão host. A senha correta só pode ser
+testada por quem a conhece.
+
 ### Configurações persistidas
 
 Fonte única: `~/.config/spatial-deck/settings.json`, gravado pelo
-`shell-services` (chaves `theme`, `bar` e `night_light`). O frontend mantém o
+`shell-services` (chaves `theme`, `bar`, `night_light` e
+`lock_after_minutes`). O frontend mantém o
 `localStorage` como cache/fallback, pede `settings_request` ao conectar e
 envia `set_setting` a cada mudança. `?theme=` continua tendo precedência sobre
 o arquivo (e o tema escolhido na UI é regravado como preferência). O
@@ -591,6 +619,9 @@ O JSON é internamente marcado por `type` (snake_case):
 {"type":"settings_state","theme":"nord","bar":{"hour24":true,"modules":[]},"night_light":false}
 {"type":"session_action","action":"logout"}
 {"type":"toggle_session_menu"}
+{"type":"lock_state","locked":true}
+{"type":"unlock_attempt","password":"…"}
+{"type":"unlock_result","ok":false,"message":"Senha incorreta. Nova tentativa em 1 s."}
 ```
 
 - `CanvasTransform` aplica `screen_x = world_x * scale + offset_x` e

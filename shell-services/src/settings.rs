@@ -19,6 +19,9 @@ pub struct Settings {
     pub bar: Option<Value>,
     #[serde(default)]
     pub night_light: bool,
+    /// Bloqueia a tela após N minutos sem input (0 = desligado).
+    #[serde(default)]
+    pub lock_after_minutes: u32,
 }
 
 impl Settings {
@@ -51,6 +54,7 @@ impl Settings {
             theme: self.theme.clone(),
             bar: self.bar.clone(),
             night_light: self.night_light,
+            lock_after_minutes: self.lock_after_minutes,
         }
     }
 
@@ -89,6 +93,13 @@ impl Settings {
                 }
                 None => false,
             },
+            "lock-after" => match value.as_u64() {
+                Some(minutes) if minutes <= 1440 => {
+                    self.lock_after_minutes = minutes as u32;
+                    true
+                }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -120,9 +131,16 @@ mod tests {
         assert!(settings.set("night-light", &serde_json::json!(true)));
         assert!(settings.night_light);
 
+        assert!(settings.set("lock-after", &serde_json::json!(5)));
+        assert_eq!(settings.lock_after_minutes, 5);
+        assert!(settings.set("lock-after", &serde_json::json!(0)));
+        assert_eq!(settings.lock_after_minutes, 0);
+
         assert!(!settings.set("theme", &serde_json::json!(3)));
         assert!(!settings.set("bar", &serde_json::json!("não é objeto")));
         assert!(!settings.set("night-light", &serde_json::json!("sim")));
+        assert!(!settings.set("lock-after", &serde_json::json!(-1)));
+        assert!(!settings.set("lock-after", &serde_json::json!(1441)));
         assert!(!settings.set("inexistente", &serde_json::json!(1)));
     }
 
@@ -132,6 +150,7 @@ mod tests {
             theme: Some("minimalist".into()),
             bar: Some(serde_json::json!({ "hour24": true, "modules": [] })),
             night_light: false,
+            lock_after_minutes: 10,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let restored: Settings = serde_json::from_str(&json).unwrap();

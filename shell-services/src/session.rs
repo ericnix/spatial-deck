@@ -50,8 +50,10 @@ fn method_for(action: SessionActionKind) -> Option<&'static str> {
         SessionActionKind::Suspend => Some("Suspend"),
         SessionActionKind::Reboot => Some("Reboot"),
         SessionActionKind::PowerOff => Some("PowerOff"),
-        // Logout encerra só o desktop; lock chega na etapa 9.
-        SessionActionKind::Logout | SessionActionKind::Lock => None,
+        // Logout/Unlock são tratados no compositor; Lock é estado local.
+        SessionActionKind::Logout
+        | SessionActionKind::Lock
+        | SessionActionKind::Unlock => None,
     }
 }
 
@@ -67,8 +69,9 @@ mod tests {
     }
 
     #[test]
-    fn logout_and_lock_stay_out_of_logind() {
+    fn logout_lock_and_unlock_stay_out_of_logind() {
         assert_eq!(method_for(SessionActionKind::Logout), None);
         assert_eq!(method_for(SessionActionKind::Lock), None);
+        assert_eq!(method_for(SessionActionKind::Unlock), None);
     }
 }

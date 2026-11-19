@@ -273,6 +273,10 @@ struct State {
     night_light: bool,
     /// O tema veio de `?theme=`, que tem precedência sobre o settings.json.
     theme_from_url: bool,
+    /// Tela bloqueada (o compositor esconde as janelas e captura o input).
+    locked: bool,
+    /// Minutos sem input para bloquear (0 = desligado).
+    lock_after_minutes: u32,
     battery_present: bool,
     battery_percent: u8,
     battery_charging: bool,
@@ -338,6 +342,8 @@ impl Default for State {
             power_profiles: Vec::new(),
             night_light: false,
             theme_from_url: false,
+            locked: false,
+            lock_after_minutes: 0,
             battery_present: false,
             battery_percent: 0,
             battery_charging: false,
@@ -384,6 +390,7 @@ pub fn start() -> Result<(), JsValue> {
     setup_system(&document)?;
     setup_control_center(&window, &document)?;
     setup_session_menu(&document)?;
+    setup_lock_screen(&document)?;
     setup_layers(&document)?;
     drawing::init(&document)?;
     connect_websocket();
@@ -2205,8 +2212,19 @@ fn handle_server_message(text: &str) {
             theme,
             bar,
             night_light,
+            lock_after_minutes,
         } => {
-            apply_settings(theme, bar, night_light);
+            apply_settings(theme, bar, night_light, lock_after_minutes);
+        }
+        IpcMessage::LockState { locked } => {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                set_locked(&document, locked);
+            }
+        }
+        IpcMessage::UnlockResult { ok, message } => {
+            if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+                handle_unlock_result(&document, ok, &message);
+            }
         }
         IpcMessage::ToggleSessionMenu => {
             if let Some(document) = web_sys::window().and_then(|window| window.document()) {
@@ -2235,7 +2253,8 @@ fn handle_server_message(text: &str) {
         | IpcMessage::PowerProfileSet { .. }
         | IpcMessage::SettingsRequest
         | IpcMessage::SetSetting { .. }
-        | IpcMessage::SessionAction { .. } => {}
+        | IpcMessage::SessionAction { .. }
+        | IpcMessage::UnlockAttempt { .. } => {}
         _ => {}
     }
 }
@@ -3316,6 +3335,9 @@ fn start_clock_ticker() {
     let callback = Closure::<dyn FnMut()>::new(|| {
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             update_clock(&document);
+            if STATE.with(|state| state.borrow().locked) {
+                update_lock_clock(&document);
+            }
         }
     });
     if let Some(window) = web_sys::window() {
@@ -4684,6 +4706,19 @@ fn setup_control_center(window: &Window, document: &Document) -> Result<(), JsVa
                     );
                     render_control_center(&document_for_click);
                 }
+                "lock-timeout" => {
+                    let current = STATE.with(|state| state.borrow().lock_after_minutes);
+                    let options = [0u32, 1, 5, 10, 15];
+                    let index = options
+                        .iter()
+                        .position(|value| *value == current)
+                        .map(|index| (index + 1) % options.len())
+                        .unwrap_or(0);
+                    let next = options[index];
+                    STATE.with(|state| state.borrow_mut().lock_after_minutes = next);
+                    persist_setting("lock-after", serde_json::json!(next));
+                    render_control_center(&document_for_click);
+                }
                 "power" => {
                     let next = STATE.with(|state| {
                         let state = state.borrow();
@@ -4867,6 +4902,7 @@ fn render_control_center(document: &Document) {
         volume_muted,
         brightness_available,
         brightness_percent,
+        lock_after_minutes,
         theme,
     ) = STATE.with(|state| {
         let state = state.borrow();
@@ -4888,6 +4924,7 @@ fn render_control_center(document: &Document) {
             state.volume_muted,
             state.brightness_available,
             state.brightness_percent,
+            state.lock_after_minutes,
             state.theme,
         )
     });
@@ -4950,6 +4987,15 @@ fn render_control_center(document: &Document) {
         } else {
             let _ = button.set_attribute("hidden", "");
         }
+    }
+
+    if let Some(sub) = document.get_element_by_id("cc-lock-sub") {
+        let text = if lock_after_minutes == 0 {
+            "desligado".to_owned()
+        } else {
+            format!("{lock_after_minutes} min")
+        };
+        let _ = sub.set_text_content(Some(&text));
     }
 
     for (row, available) in [
@@ -5030,6 +5076,7 @@ fn apply_settings(
     theme: Option<String>,
     bar: Option<serde_json::Value>,
     night_light: bool,
+    lock_after_minutes: u32,
 ) {
     let Some(window) = web_sys::window() else {
         return;
@@ -5039,7 +5086,11 @@ fn apply_settings(
     };
 
     let theme_from_url = STATE.with(|state| state.borrow().theme_from_url);
-    STATE.with(|state| state.borrow_mut().night_light = night_light);
+    STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.night_light = night_light;
+        state.lock_after_minutes = lock_after_minutes;
+    });
 
     match bar {
         Some(value) => {
@@ -5178,6 +5229,10 @@ fn setup_session_menu(document: &Document) -> Result<(), JsValue> {
                     send_session(SessionActionKind::Suspend);
                     close_session_menu(&document_for_click);
                     show_toast(&document_for_click, "Suspendendo o computador…");
+                }
+                "lock" => {
+                    send_session(SessionActionKind::Lock);
+                    close_session_menu(&document_for_click);
                 }
                 "reboot" => request_session_confirmation(
                     &document_for_click,
@@ -5328,6 +5383,189 @@ fn hide_session_confirmation(document: &Document) {
     SESSION_PENDING.with(|slot| *slot.borrow_mut() = None);
     if let Some(element) = document.get_element_by_id("session-confirm") {
         let _ = element.set_attribute("hidden", "");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tela de bloqueio
+// ---------------------------------------------------------------------------
+
+fn setup_lock_screen(document: &Document) -> Result<(), JsValue> {
+    if let Ok(form) = by_id(document, "lock-form") {
+        let document_for_submit = document.clone();
+        let submit = Closure::<dyn FnMut(Event)>::new(move |event: Event| {
+            event.prevent_default();
+            submit_unlock(&document_for_submit);
+        });
+        form.add_event_listener_with_callback("submit", submit.as_ref().unchecked_ref())?;
+        submit.forget();
+    }
+
+    // Esc não desbloqueia nem fecha nada enquanto a tela está bloqueada.
+    let document_for_key = document.clone();
+    let key = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+        if event.key() == "Escape" && STATE.with(|state| state.borrow().locked) {
+            event.prevent_default();
+            event.stop_propagation();
+        }
+    });
+    document.add_event_listener_with_callback_and_bool(
+        "keydown",
+        key.as_ref().unchecked_ref(),
+        true,
+    )?;
+    key.forget();
+
+    update_lock_clock(document);
+    Ok(())
+}
+
+fn submit_unlock(document: &Document) {
+    let Some(input) = document
+        .get_element_by_id("lock-password")
+        .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
+    else {
+        return;
+    };
+    let password = input.value();
+    if password.is_empty() {
+        show_lock_error(document, "Digite a senha.");
+        return;
+    }
+
+    if let Some(button) = document.get_element_by_id("lock-submit") {
+        if let Ok(button) = button.dyn_into::<web_sys::HtmlElement>() {
+            let _ = button.set_attribute("disabled", "");
+            let _ = button.set_text_content(Some("Verificando…"));
+        }
+    }
+    if let Some(error) = document.get_element_by_id("lock-error") {
+        let _ = error.set_attribute("hidden", "");
+    }
+    send_message(&IpcMessage::UnlockAttempt { password });
+
+    // Se o serviço não responder, não deixa o botão travado para sempre.
+    if let Some(window) = web_sys::window() {
+        let document_for_timeout = document.clone();
+        let callback = Closure::<dyn FnMut()>::new(move || {
+            if let Some(button) = document_for_timeout.get_element_by_id("lock-submit") {
+                if let Ok(button) = button.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = button.remove_attribute("disabled");
+                    let _ = button.set_text_content(Some("Desbloquear"));
+                }
+            }
+        });
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+            callback.as_ref().unchecked_ref(),
+            6_000,
+        );
+        callback.forget();
+    }
+}
+
+fn handle_unlock_result(document: &Document, ok: bool, message: &str) {
+    if let Some(button) = document.get_element_by_id("lock-submit") {
+        if let Ok(button) = button.dyn_into::<web_sys::HtmlElement>() {
+            let _ = button.remove_attribute("disabled");
+            let _ = button.set_text_content(Some("Desbloquear"));
+        }
+    }
+
+    if ok {
+        if let Some(input) = document
+            .get_element_by_id("lock-password")
+            .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
+        {
+            input.set_value("");
+        }
+        if let Some(error) = document.get_element_by_id("lock-error") {
+            let _ = error.set_attribute("hidden", "");
+        }
+        send_session(SessionActionKind::Unlock);
+    } else {
+        show_lock_error(document, message);
+        if let Some(input) = document
+            .get_element_by_id("lock-password")
+            .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
+        {
+            input.set_value("");
+            let _ = input.focus();
+        }
+    }
+}
+
+fn show_lock_error(document: &Document, message: &str) {
+    if let Some(error) = document.get_element_by_id("lock-error") {
+        let _ = error.set_text_content(Some(message));
+        let _ = error.remove_attribute("hidden");
+    }
+}
+
+fn set_locked(document: &Document, locked: bool) {
+    STATE.with(|state| state.borrow_mut().locked = locked);
+
+    if let Ok(root) = document_element(document) {
+        if locked {
+            let _ = root.set_attribute("data-locked", "1");
+        } else {
+            let _ = root.remove_attribute("data-locked");
+        }
+    }
+    if let Some(overlay) = document.get_element_by_id("lock-screen") {
+        if locked {
+            let _ = overlay.remove_attribute("hidden");
+        } else {
+            let _ = overlay.set_attribute("hidden", "");
+        }
+    }
+
+    if locked {
+        if let Some(error) = document.get_element_by_id("lock-error") {
+            let _ = error.set_attribute("hidden", "");
+        }
+        if let Some(button) = document.get_element_by_id("lock-submit") {
+            if let Ok(button) = button.dyn_into::<web_sys::HtmlElement>() {
+                let _ = button.remove_attribute("disabled");
+                let _ = button.set_text_content(Some("Desbloquear"));
+            }
+        }
+        if let Some(input) = document
+            .get_element_by_id("lock-password")
+            .and_then(|element| element.dyn_into::<HtmlInputElement>().ok())
+        {
+            input.set_value("");
+            let _ = input.focus();
+        }
+        update_lock_clock(document);
+    }
+
+    send_chrome_rects(document);
+}
+
+fn update_lock_clock(document: &Document) {
+    let now = js_sys::Date::new_0();
+    let hour24 = STATE.with(|state| state.borrow().bar.hour24);
+    let hours = now.get_hours();
+    let minutes = now.get_minutes();
+    let time = if hour24 {
+        format!("{hours:02}:{minutes:02}")
+    } else {
+        let hour12 = if hours % 12 == 0 { 12 } else { hours % 12 };
+        let suffix = if hours < 12 { "AM" } else { "PM" };
+        format!("{hour12}:{minutes:02} {suffix}")
+    };
+    if let Some(element) = document.get_element_by_id("lock-time") {
+        let _ = element.set_text_content(Some(&time));
+    }
+    if let Some(element) = document.get_element_by_id("lock-date") {
+        let date = format!(
+            "{}, {} {} {}",
+            WEEKDAYS[now.get_day() as usize],
+            now.get_date(),
+            MONTHS[now.get_month() as usize],
+            now.get_full_year()
+        );
+        let _ = element.set_text_content(Some(&date));
     }
 }
 

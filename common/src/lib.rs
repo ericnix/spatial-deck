@@ -283,6 +283,8 @@ pub enum IpcMessage {
         /// JSON do layout da barra, opaco para os serviços.
         bar: Option<serde_json::Value>,
         night_light: bool,
+        /// Bloqueia a tela após N minutos sem input (0 = desligado).
+        lock_after_minutes: u32,
     },
 
     /// Alteração de uma configuração (`theme`, `bar`, `night-light`).
@@ -297,6 +299,15 @@ pub enum IpcMessage {
     /// O compositor pede ao shell para abrir/fechar o menu de sessão
     /// (atalho global `Ctrl+Alt+S`).
     ToggleSessionMenu,
+
+    /// Estado de bloqueio do desktop (publicado pelo compositor).
+    LockState { locked: bool },
+
+    /// Tentativa de desbloqueio. A senha **nunca** é logada nem persistida.
+    UnlockAttempt { password: String },
+
+    /// Resultado da autenticação de desbloqueio.
+    UnlockResult { ok: bool, message: String },
 }
 
 /// Ações de sessão aceitas pelo menu.
@@ -308,8 +319,10 @@ pub enum SessionActionKind {
     PowerOff,
     /// Encerra apenas o desktop aninhado (não a sessão hospedeira).
     Logout,
-    /// Placeholder até a etapa 9 (lock screen).
+    /// Bloqueia a tela (o compositor esconde as janelas e captura o input).
     Lock,
+    /// Desbloqueia após autenticação bem-sucedida no `shell-services`.
+    Unlock,
 }
 
 /// Ações de volume aceitas pelo `shell-services`.
@@ -1098,6 +1111,7 @@ mod tests {
             theme: Some("nord".into()),
             bar: Some(serde_json::json!({ "hour24": true })),
             night_light: false,
+            lock_after_minutes: 5,
         };
         let json = settings.to_json().unwrap();
         assert!(json.contains("\"type\":\"settings_state\""));
@@ -1125,6 +1139,7 @@ mod tests {
             SessionActionKind::PowerOff,
             SessionActionKind::Logout,
             SessionActionKind::Lock,
+            SessionActionKind::Unlock,
         ] {
             let message = IpcMessage::SessionAction { action };
             let json = message.to_json().unwrap();
@@ -1143,6 +1158,26 @@ mod tests {
         let json = toggle.to_json().unwrap();
         assert!(json.contains("\"type\":\"toggle_session_menu\""));
         assert_eq!(IpcMessage::from_json(&json).unwrap(), toggle);
+
+        let locked = IpcMessage::LockState { locked: true };
+        let json = locked.to_json().unwrap();
+        assert!(json.contains("\"type\":\"lock_state\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), locked);
+
+        let attempt = IpcMessage::UnlockAttempt {
+            password: "segredo".into(),
+        };
+        let json = attempt.to_json().unwrap();
+        assert!(json.contains("\"type\":\"unlock_attempt\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), attempt);
+
+        let result = IpcMessage::UnlockResult {
+            ok: false,
+            message: "Senha incorreta.".into(),
+        };
+        let json = result.to_json().unwrap();
+        assert!(json.contains("\"type\":\"unlock_result\""));
+        assert_eq!(IpcMessage::from_json(&json).unwrap(), result);
     }
 
     #[test]

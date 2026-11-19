@@ -545,6 +545,72 @@ cicla via `power_profile_set`.
 - A cópia do resultado usa a área de transferência do compositor aninhado;
   não é a mesma do host.
 
+## Etapa 9 — Lock screen + idle + autenticação — CONCLUÍDA
+
+### (a) Bloqueio no compositor + superfície
+
+- Estado `locked` no compositor: só o shell é desenhado (janelas, layers,
+  chrome e bordas minimalistas são pulados) e teclado/ponteiro vão para o
+  shell (campo de senha). `window_id_under` fica `None` e todos os atalhos são
+  ignorados enquanto bloqueado.
+- Foco de teclado anterior é salvo em `lock_focus` e restaurado no
+  desbloqueio; `LockState { locked }` é publicado no barramento.
+- Saída de emergência: um `CloseRequested` do host com a tela bloqueada
+  encerra o desktop (documentado na UI e no README).
+- **Desvio documentado**: o `ext-session-lock-v1` do Smithay 0.7 não é usado
+  porque o shell GTK/WebKit não cria lock surfaces. Foi usado o fallback (b) do
+  plano (input inhibitor manual), válido apenas dentro do desktop aninhado.
+
+### (b) Autenticação + UI
+
+- `shell-services/src/auth.rs`: `unix_chkpwd` (helper setuid do `pam_unix`)
+  via stdin terminado em NUL; sem root, sem `/etc/pam.d` novo e sem
+  `pam_faillock` (errar a senha não bloqueia a conta do host). Backoff
+  1→2→4→8→16→30 s; senha nunca logada.
+- IPC `unlock_attempt { password }` / `unlock_result { ok, message }` e
+  `session_action { unlock }` após sucesso.
+- UI: relógio grande, data, campo de senha, botão com estado "Verificando…",
+  erro em vermelho, `Esc` bloqueado. O overlay cobre o viewport e a classe
+  `data-locked` esconde HUD, deck, painéis, OSD e toasts.
+
+### (c) Idle + settings
+
+- `lock_after_minutes` no `settings.json` (0 = desligado) e no
+  `settings_state`; o compositor conta a inatividade e bloqueia.
+- Central de controle ganhou a linha **Bloqueio automático**, que alterna
+  0/1/5/10/15 min e persiste via `set_setting`.
+- Desbloquear reinicia `last_activity` (corrigido: sem isso o idle bloqueava
+  de novo imediatamente).
+
+### Evidências (19/11/2026)
+
+- Bloqueio pelo menu de sessão: log `tela bloqueada`; captura mostrou só o
+  relógio, o formulário e o fundo do tema — janelas e barra ocultas.
+- `unlock_result ok=false` mostrou a mensagem em vermelho; `ok=true` fez o
+  frontend enviar `session_action unlock` e o compositor logou
+  `tela desbloqueada` (janelas/barra voltaram).
+- Autenticação real via `unlock_attempt` com senha errada: dois
+  `unlock_result ok=false` com "Nova tentativa em 1 s"/"2 s" e logs
+  `senha de desbloqueio incorreta` (sem a senha); tentativa imediata seguinte
+  devolveu `Aguarde 7 s antes de tentar de novo.`
+- Idle: `lock-after = 1` levou a `bloqueio por inatividade minutes=1` e à tela
+  de bloqueio; após desbloquear, ficou 6 s sem re-bloquear (fix validado).
+- `lock_after_minutes` gravado/restaurado no `settings.json` e resetado para 0.
+- Testes: **25** (common) + **20** (compositor) + **3** (calc) + **30**
+  (services) verdes; `cargo build --workspace` limpo.
+
+### Limitações
+
+- Sem `ext-session-lock-v1` real (fallback manual documentado); o bloqueio não
+  protege contra a sessão hospedeira.
+- Autenticação usa `unix_chkpwd` em vez de um stack PAM dedicado
+  (`/etc/pam.d/spatial-deck` exigiria sudo); funciona para o usuário atual.
+- O agente não conhece a senha do usuário: o caminho de senha **correta** foi
+  validado simulando `unlock_result ok=true`; a verificação real foi testada
+  com senha errada (helper + backoff). O usuário deve testar a senha correta.
+- `Esc` não desbloqueia por design; a saída sem senha é fechar a janela do deck
+  no host.
+
 ## Próxima etapa
 
-Etapa 9 — lock screen (session-lock + idle-notify). Nada iniciado.
+Etapa 10 — wallpaper picker no canvas. Nada iniciado.

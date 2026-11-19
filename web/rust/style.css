@@ -2018,3 +2018,101 @@ html.panning * {
   font-weight: 400;
   font-size: 10px;
 }
+
+/* ------------------------------------------------------------ lock screen */
+
+html[data-locked="1"] #hud,
+html[data-locked="1"] #deck-shell,
+html[data-locked="1"] #control-center,
+html[data-locked="1"] #session-menu,
+html[data-locked="1"] #notification-popups,
+html[data-locked="1"] #notification-panel,
+html[data-locked="1"] #layers-panel,
+html[data-locked="1"] #osd,
+html[data-locked="1"] #toast {
+  display: none !important;
+}
+
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: grid;
+  place-items: center;
+  background: var(--popover-bg);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  cursor: default;
+}
+.lock-screen[hidden] { display: none; }
+
+.lock-screen__inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  width: min(380px, 82vw);
+  text-align: center;
+}
+
+.lock-screen__clock { display: flex; flex-direction: column; gap: 4px; }
+.lock-screen__clock b {
+  color: var(--ink);
+  font-size: 64px;
+  font-weight: 300;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.lock-screen__clock span { color: var(--muted); font-size: 13px; }
+
+.lock-screen__form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.lock-screen__label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.lock-screen__input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--chip-bg);
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: center;
+}
+.lock-screen__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.lock-screen__btn {
+  height: 40px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.lock-screen__btn:disabled { opacity: .6; cursor: wait; }
+.lock-screen__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  min-height: 16px;
+}
+.lock-screen__error[hidden] { display: none; }
+.lock-screen__hint { color: var(--muted); font-size: 10px; line-height: 1.5; }

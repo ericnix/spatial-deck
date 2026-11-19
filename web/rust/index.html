@@ -229,6 +229,9 @@ screen_y = world_y * scale + offset_y</pre>
       <button id="cc-power" class="cc-row" type="button" data-cc-action="power" title="Alternar perfil de energia">
         <span>Energia</span><b id="cc-power-sub">—</b>
       </button>
+      <button id="cc-lock" class="cc-row" type="button" data-cc-action="lock-timeout" title="Bloquear a tela após inatividade">
+        <span>Bloqueio automático</span><b id="cc-lock-sub">desligado</b>
+      </button>
       <button id="cc-session" class="cc-row cc-row--muted" type="button" data-cc-action="session" title="Chega na etapa 8">
         <span>Sessão</span><b>Em breve</b>
       </button>
@@ -246,7 +249,7 @@ screen_y = world_y * scale + offset_y</pre>
       <button class="session-action" type="button" data-session="reboot"><span>Reiniciar</span><small>pede confirmação</small></button>
       <button class="session-action" type="button" data-session="poweroff"><span>Desligar</span><small>pede confirmação</small></button>
       <button class="session-action" type="button" data-session="logout"><span>Sair do desktop</span><small>encerra apenas o Spatial Deck</small></button>
-      <button class="session-action" type="button" data-session="lock" disabled><span>Bloquear</span><small>chega na etapa 9</small></button>
+      <button class="session-action" type="button" data-session="lock"><span>Bloquear</span><small>esconde as janelas e pede a senha</small></button>
     </div>
     <div id="session-confirm" class="session-confirm" hidden>
       <p id="session-confirm-text">Confirmar?</p>
@@ -376,6 +379,22 @@ screen_y = world_y * scale + offset_y</pre>
       <ul id="layers-windows" class="layers-list"></ul>
       <p class="layers-panel__title">Imagens</p>
       <ul id="layers-images" class="layers-list"></ul>
+    </div>
+  </section>
+
+  <section id="lock-screen" class="lock-screen" hidden aria-label="Tela bloqueada">
+    <div class="lock-screen__inner">
+      <div class="lock-screen__clock">
+        <b id="lock-time">--:--</b>
+        <span id="lock-date"></span>
+      </div>
+      <form id="lock-form" class="lock-screen__form">
+        <label class="lock-screen__label" for="lock-password">Sessão bloqueada</label>
+        <input id="lock-password" class="lock-screen__input" type="password" autocomplete="off" spellcheck="false" placeholder="Senha" aria-label="Senha">
+        <button id="lock-submit" class="lock-screen__btn" type="submit">Desbloquear</button>
+        <p id="lock-error" class="lock-screen__error" hidden></p>
+        <small class="lock-screen__hint">Esc não desbloqueia. Para sair sem a senha, feche a janela do deck no sistema hospedeiro.</small>
+      </form>
     </div>
   </section>
 

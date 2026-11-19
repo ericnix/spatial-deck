@@ -76,7 +76,7 @@ use smithay::{
                 wl_seat,
                 wl_surface::WlSurface,
             },
-            Client, Display, DisplayHandle, ListeningSocket,
+            Client, Display, DisplayHandle, ListeningSocket, Resource,
         },
         winit::{
             dpi::LogicalSize, platform::pump_events::PumpStatus, window::Window as WinitWindow,
@@ -497,6 +497,14 @@ struct App {
     resize_tool: bool,
     /// `Logout` pedido pelo menu de sessão: encerra só o desktop aninhado.
     exit_requested: bool,
+    /// Tela bloqueada: só o shell é desenhado e recebe input.
+    locked: bool,
+    /// Foco de teclado salvo ao bloquear, restaurado no desbloqueio.
+    lock_focus: Option<WlSurface>,
+    /// Minutos sem input para bloquear (0 = desligado).
+    lock_after_minutes: u32,
+    /// Última atividade de teclado/ponteiro.
+    last_activity: Instant,
     /// Linha inferior da barra superior: as janelas reais são cortadas aqui.
     hud_bottom: Option<i32>,
     /// Última posição absoluta do ponteiro no output. `PointerHandle` pode
@@ -604,6 +612,10 @@ impl App {
             chrome_rects: Vec::new(),
             resize_tool: false,
             exit_requested: false,
+            locked: false,
+            lock_focus: None,
+            lock_after_minutes: 0,
+            last_activity: Instant::now(),
             hud_bottom: None,
             pointer_screen: Point::from((0.0, 0.0)),
             overview: None,
@@ -652,6 +664,9 @@ impl App {
 
     /// Janela de aplicativo sob o ponteiro (o shell é ignorado).
     fn window_id_under(&self, location: Point<f64, smithay::utils::Logical>) -> Option<u32> {
+        if self.locked {
+            return None;
+        }
         self.window_under(location).map(|(id, _, _, _)| id)
     }
 
@@ -866,6 +881,10 @@ impl App {
         Point<f64, smithay::utils::Logical>,
         Point<f64, smithay::utils::Logical>,
     )> {
+        // Com a tela bloqueada, todo o ponteiro é do shell (campo de senha).
+        if self.locked {
+            return self.shell_pointer_focus(location);
+        }
         // Barras e overlays de layer ficam acima de tudo: o ponteiro vai
         // para elas antes de qualquer janela do canvas.
         if let Some(layer) = self.layer_pointer_focus(location) {
@@ -1515,6 +1534,59 @@ impl App {
         let _ = self.broadcast.send((IPC_SOURCE_COMPOSITOR, message));
     }
 
+    fn shell_surface(&self) -> Option<WlSurface> {
+        self.shell_window
+            .as_ref()?
+            .window
+            .wl_surface()
+            .map(|surface| surface.into_owned())
+    }
+
+    /// Bloqueia a tela: só o shell continua desenhando e recebendo input.
+    fn lock(&mut self) {
+        if self.locked {
+            return;
+        }
+        self.locked = true;
+        self.lock_focus = self.keyboard.current_focus();
+        if let Some(surface) = self.shell_surface() {
+            let keyboard = self.keyboard.clone();
+            keyboard.set_focus(self, Some(surface), SERIAL_COUNTER.next_serial());
+        }
+        info!("tela bloqueada");
+        self.publish(IpcMessage::LockState { locked: true });
+    }
+
+    fn unlock(&mut self) {
+        if !self.locked {
+            return;
+        }
+        self.locked = false;
+        // Desbloquear conta como atividade; senão o idle re-bloqueia na hora.
+        self.last_activity = Instant::now();
+        let focus = self
+            .lock_focus
+            .take()
+            .filter(|surface| surface.is_alive())
+            .or_else(|| self.shell_surface());
+        let keyboard = self.keyboard.clone();
+        keyboard.set_focus(self, focus, SERIAL_COUNTER.next_serial());
+        info!("tela desbloqueada");
+        self.publish(IpcMessage::LockState { locked: false });
+    }
+
+    /// Bloqueia após `lock_after_minutes` sem teclado/ponteiro.
+    fn check_idle(&mut self) {
+        if self.locked || self.lock_after_minutes == 0 {
+            return;
+        }
+        let limit = Duration::from_secs(u64::from(self.lock_after_minutes) * 60);
+        if self.last_activity.elapsed() >= limit {
+            info!(minutes = self.lock_after_minutes, "bloqueio por inatividade");
+            self.lock();
+        }
+    }
+
     fn begin_move(
         &mut self,
         window_id: u32,
@@ -1858,12 +1930,20 @@ impl App {
             IpcMessage::Toast { .. } => {
                 // Mensagem enviada pelo compositor; ignorada se ecoada.
             }
-            IpcMessage::SessionAction { action } => {
-                if action == SessionActionKind::Logout {
+            IpcMessage::SessionAction { action } => match action {
+                SessionActionKind::Logout => {
                     info!("sair do desktop pedido pelo menu de sessão");
                     self.exit_requested = true;
                 }
-                // As demais ações seguem para o `shell-services` via barramento.
+                SessionActionKind::Lock => self.lock(),
+                SessionActionKind::Unlock => self.unlock(),
+                // Suspend/Reboot/PowerOff seguem para o `shell-services`.
+                _ => {}
+            },
+            IpcMessage::SettingsState {
+                lock_after_minutes, ..
+            } => {
+                self.lock_after_minutes = lock_after_minutes;
             }
             IpcMessage::Notification { .. }
             | IpcMessage::NotificationClosed { .. }
@@ -1902,9 +1982,11 @@ impl App {
             | IpcMessage::PowerProfileSet { .. }
             | IpcMessage::Osd { .. }
             | IpcMessage::SettingsRequest
-            | IpcMessage::SettingsState { .. }
             | IpcMessage::SetSetting { .. }
-            | IpcMessage::ToggleSessionMenu => {
+            | IpcMessage::ToggleSessionMenu
+            | IpcMessage::LockState { .. }
+            | IpcMessage::UnlockAttempt { .. }
+            | IpcMessage::UnlockResult { .. } => {
                 // Notificações são roteadas pelo barramento IPC entre o
                 // `shell-services` (Unix) e o frontend (WebSocket). O
                 // compositor não precisa agir sobre elas.
@@ -3237,7 +3319,11 @@ fn run_compositor(
     loop {
         let keyboard = state.keyboard.clone();
         let pointer = state.pointer.clone();
-        let status = winit.dispatch_new_events(|event| match event {
+        let status = winit.dispatch_new_events(|event| {
+            if matches!(&event, WinitEvent::Input(_)) {
+                state.last_activity = Instant::now();
+            }
+            match event {
             WinitEvent::CloseRequested => {
                 info!(
                     x = pointer_location.x,
@@ -3246,6 +3332,12 @@ fn run_compositor(
                     windows = state.windows.len(),
                     "pedido de fechamento recebido do gerenciador de janelas"
                 );
+                // Saída de emergência do host: com a tela bloqueada não há
+                // como destravar sem a senha, então fechar a janela encerra.
+                if state.locked {
+                    info!("fechando o desktop com a tela bloqueada");
+                    should_exit = true;
+                } else {
                 // O KWin manda o pedido de fechamento para o deck (Alt+F4 ou
                 // botão × da barra de título). Se houver uma janela interna em
                 // foco, fecha essa janela em vez de encerrar o desktop.
@@ -3261,6 +3353,7 @@ fn run_compositor(
                     }
                 } else {
                     should_exit = true;
+                }
                 }
             }
             WinitEvent::Resized { size, .. } => state.resize_output(size),
@@ -3452,6 +3545,32 @@ fn run_compositor(
                 pointer.frame(&mut state);
             }
             WinitEvent::Input(InputEvent::PointerButton { event }) => {
+                if state.locked {
+                    // Bloqueado: o clique vai para o shell (campo de senha),
+                    // sem focar/arrastar janelas nem camadas.
+                    if let Some((surface, origin, motion)) = state.pointer_focus(pointer_location) {
+                        pointer.motion(
+                            &mut state,
+                            Some((surface, origin)),
+                            &MotionEvent {
+                                location: motion,
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: 0,
+                            },
+                        );
+                    }
+                    pointer.button(
+                        &mut state,
+                        &ButtonEvent {
+                            serial: SERIAL_COUNTER.next_serial(),
+                            time: 0,
+                            button: event.button_code(),
+                            state: event.state(),
+                        },
+                    );
+                    pointer.frame(&mut state);
+                    return;
+                }
                 let left = event.button_code() == 0x110;
 
                 if event.state() == ButtonState::Pressed {
@@ -3611,6 +3730,7 @@ fn run_compositor(
                 pointer.frame(&mut state);
             }
             _ => {}
+            }
         });
 
         if should_exit || state.exit_requested || matches!(status, PumpStatus::Exit(_)) {
@@ -3629,6 +3749,7 @@ fn run_compositor(
         while let Ok(message) = state.ipc.try_recv() {
             state.handle_ipc(message);
         }
+        state.check_idle();
 
         if let Some(stream) = listener.accept()? {
             let client = display
@@ -3799,12 +3920,16 @@ fn run_compositor(
             };
             frame.clear(clear_color, &[damage])?;
             draw_render_elements(&mut frame, 1.0, &shell_elements, &[damage])?;
-            draw_render_elements(&mut frame, 1.0, &layer_bottom, &[damage])?;
-            draw_render_elements(&mut frame, 1.0, &window_elements, &[damage])?;
-            draw_render_elements(&mut frame, 1.0, &layer_top, &[damage])?;
-            draw_render_elements(&mut frame, 1.0, &chrome, &[damage])?;
+            // Bloqueado: o shell (tela de bloqueio) é a única coisa visível;
+            // janelas, layers e chrome ficam ocultos.
+            if !state.locked {
+                draw_render_elements(&mut frame, 1.0, &layer_bottom, &[damage])?;
+                draw_render_elements(&mut frame, 1.0, &window_elements, &[damage])?;
+                draw_render_elements(&mut frame, 1.0, &layer_top, &[damage])?;
+                draw_render_elements(&mut frame, 1.0, &chrome, &[damage])?;
+            }
 
-            if !minimalist_borders.is_empty() {
+            if !minimalist_borders.is_empty() && !state.locked {
                 let border_color = if state.theme == CanvasTheme::MinimalistDark {
                     minimalist_render::OUTLINE_COLOR_DARK
                 } else {

@@ -8,6 +8,7 @@
 //! Nesse caso o serviço continua no nome alternativo (ver `dbus.rs`) e não
 //! interfere no desktop real.
 
+mod auth;
 mod dbus;
 mod ipc;
 mod media;
@@ -43,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
     let store = Arc::new(Mutex::new(Store::load()));
     let regions = Arc::new(Mutex::new(RegionStore::load()));
     let mut settings = settings::Settings::load();
+    let mut auth = auth::AuthGate::default();
     let (ipc_tx, ipc_rx) = mpsc::channel(64);
     let (incoming_tx, mut incoming_rx) = mpsc::channel(256);
 
@@ -102,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
                     &store,
                     &regions,
                     &mut settings,
+                    &mut auth,
                     &ipc_tx,
                     &emitter,
                     &tray_tx,
@@ -139,6 +142,7 @@ async fn handle(
     store: &Arc<Mutex<Store>>,
     regions: &Arc<Mutex<RegionStore>>,
     settings: &mut settings::Settings,
+    auth: &mut auth::AuthGate,
     ipc: &mpsc::Sender<IpcMessage>,
     emitter: &SignalEmitter<'static>,
     tray: &mpsc::Sender<tray::TrayCommand>,
@@ -168,6 +172,10 @@ async fn handle(
         }
         IpcMessage::SessionAction { action } => {
             session::perform(action).await;
+        }
+        IpcMessage::UnlockAttempt { password } => {
+            let (ok, message) = auth.attempt(&password).await;
+            let _ = ipc.send(IpcMessage::UnlockResult { ok, message }).await;
         }
         // O shell abre/fecha o menu por conta própria; o compositor só
         // publica o atalho global.
@@ -239,7 +247,9 @@ async fn handle(
         | IpcMessage::BluetoothState { .. }
         | IpcMessage::PowerProfileState { .. }
         | IpcMessage::Osd { .. }
-        | IpcMessage::SettingsState { .. } => {
+        | IpcMessage::SettingsState { .. }
+        | IpcMessage::LockState { .. }
+        | IpcMessage::UnlockResult { .. } => {
             // Estados produzidos pelos próprios serviços.
         }
         IpcMessage::NetworkSetWifi { enabled } => {
